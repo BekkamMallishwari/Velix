@@ -6,6 +6,7 @@ from velix_agent.core.logging import get_logger
 from velix_agent.core.response import AgentResponse
 from velix_agent.core.session import Session
 from velix_agent.providers.base import Provider
+from velix_agent.tools.registry import ToolRegistry
 
 logger = get_logger("agent")
 
@@ -16,9 +17,15 @@ class Agent:
     Responsible for processing user input, updating context, and returning responses.
     """
 
-    def __init__(self, session: Session, provider: Provider | None = None) -> None:
+    def __init__(
+        self,
+        session: Session,
+        provider: Provider | None = None,
+        tool_registry: ToolRegistry | None = None,
+    ) -> None:
         self.session = session
         self._provider = provider
+        self.tool_registry = tool_registry or ToolRegistry()
         import os
         from pathlib import Path
 
@@ -51,21 +58,82 @@ class Agent:
             )
 
         try:
-            # Construct temporary message list
-            from velix_agent.core.message import Message
+            from velix_agent.core.message import Message, TextPart, ToolResultPart
 
-            current_messages = self.session.context.get_messages()
-            temp_user_msg = Message(role="user", content=parts)
+            # We will accumulate messages generated in this turn
+            new_messages: list[Message] = [Message(role="user", content=parts)]
 
-            # 2. Process request using full context
-            response = self._provider.generate([*current_messages, temp_user_msg])
+            MAX_ITERATIONS = 5
+            available_tools = self.tool_registry.list_tools()
 
-            # 3. Update context with user and assistant response
-            if response.status == "success":
-                self.session.context.add_user_message(parts)
-                self.session.context.add_assistant_message(response.text)
+            for _ in range(MAX_ITERATIONS):
+                current_context = self.session.context.get_messages() + new_messages
+                response = self._provider.generate(current_context, tools=available_tools)
 
-            return response
+                if response.status == "error" or not response.tool_calls:
+                    # Final response reached
+                    if response.status == "success":
+                        # Add all accumulated messages to the session context
+                        for msg in new_messages:
+                            self.session.context.add_message(msg)
+                        if response.text:
+                            self.session.context.add_assistant_message(response.text)
+                    return response
+
+                # We have tool calls
+                # Add the assistant's response with tool calls to new_messages
+                assistant_parts = []
+                if response.text:
+                    assistant_parts.append(TextPart(text=response.text))
+
+                # Safely handle tool_calls which is a list of ToolCallPart
+                for tc in response.tool_calls:
+                    assistant_parts.append(tc)
+                new_messages.append(Message(role="assistant", content=assistant_parts))
+
+                tool_results = []
+                for tc in response.tool_calls:
+                    tool = self.tool_registry.get_tool(tc.tool_name)
+                    if tool is None:
+                        tool_results.append(
+                            ToolResultPart(
+                                tool_name=tc.tool_name, error=f"Unknown tool: {tc.tool_name}", tool_call_id=tc.id
+                            )
+                        )
+                        continue
+
+                    try:
+                        res = tool.execute(**tc.args)
+                        if res.status == "error":
+                            tool_results.append(
+                                ToolResultPart(tool_name=tc.tool_name, error=res.error, tool_call_id=tc.id)
+                            )
+                        else:
+                            tool_results.append(
+                                ToolResultPart(tool_name=tc.tool_name, data=res.data, tool_call_id=tc.id)
+                            )
+                    except TypeError as e:
+                        tool_results.append(
+                            ToolResultPart(
+                                tool_name=tc.tool_name, error=f"Invalid arguments: {e}", tool_call_id=tc.id
+                            )
+                        )
+                    except Exception as e:
+                        tool_results.append(
+                            ToolResultPart(
+                                tool_name=tc.tool_name, error=f"Execution error: {e}", tool_call_id=tc.id
+                            )
+                        )
+
+                # Feed tool results back as a user message
+                new_messages.append(Message(role="user", content=tool_results))
+
+            # Exceeded MAX_ITERATIONS
+            return AgentResponse(
+                text="Agent exceeded maximum tool iterations.",
+                status="error",
+                error="Max iterations reached.",
+            )
 
         except Exception as e:
             from velix_agent.providers.errors import ProviderError

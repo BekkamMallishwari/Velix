@@ -28,6 +28,15 @@ class MacOSSandboxBackend(SandboxBackend):
             ")",
         ]
 
+        profile.append("(allow file-read*")
+        profile.append('    (subpath "/bin")')
+        profile.append('    (subpath "/usr/bin")')
+        profile.append('    (subpath "/usr/lib")')
+        profile.append('    (subpath "/System")')
+        profile.append('    (subpath "/Library")')
+        profile.append('    (subpath "/private/var/select")')
+        profile.append(')')
+
         workspace_path = policy.workspace_root.resolve().as_posix()
         profile.append(f'(allow file-read* file-write* (subpath "{workspace_path}"))')
         profile.append(f'(deny file-write* (subpath "{workspace_path}/.git"))')

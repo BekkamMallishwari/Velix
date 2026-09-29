@@ -22,6 +22,19 @@ class ListDirectoryTool(Tool):
     def description(self) -> str:
         return "Lists files and directories within a specified path in the workspace."
 
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "dir_path": {
+                    "type": "string",
+                    "description": "Relative or absolute path to the directory to list within the workspace. Use '.' for the workspace root.",
+                },
+            },
+            "required": ["dir_path"],
+        }
+
     def execute(self, **kwargs: Any) -> ToolResult:
         dir_path_str = kwargs.get("dir_path")
         if not dir_path_str:

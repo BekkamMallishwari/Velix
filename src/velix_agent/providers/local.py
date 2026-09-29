@@ -3,12 +3,15 @@
 import json
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from velix_agent.core.logging import get_logger
 from velix_agent.core.message import DocumentPart, ErrorPart, ImagePart, Message, TextPart
 from velix_agent.core.response import AgentResponse
 from velix_agent.providers.base import Provider
+
+if TYPE_CHECKING:
+    from velix_agent.tools.base import Tool
 from velix_agent.providers.errors import (
     ProviderAPIError,
     ProviderTransientError,
@@ -43,7 +46,9 @@ class LocalProvider(Provider):
         except (urllib.error.URLError, TimeoutError, OSError):
             return False, "Ollama not running"
 
-    def generate(self, messages: list[Message]) -> AgentResponse:
+    def generate(
+        self, messages: list[Message], tools: list["Tool"] | None = None
+    ) -> AgentResponse:
         is_available, reason = self.check_availability()
         if not is_available:
             if "Ollama not running" in reason:

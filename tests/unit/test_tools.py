@@ -21,6 +21,10 @@ class DummyTool(Tool):
     def description(self) -> str:
         return "A dummy tool."
 
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
     def execute(self, **kwargs) -> ToolResult:
         return ToolResult(status="success", data=kwargs)
 

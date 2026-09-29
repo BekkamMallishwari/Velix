@@ -1,10 +1,14 @@
 """Deterministic Mock Provider for tests and offline mode."""
 
 import re
+from typing import TYPE_CHECKING
 
 from velix_agent.core.message import Message
 from velix_agent.core.response import AgentResponse
 from velix_agent.providers.base import Provider
+
+if TYPE_CHECKING:
+    from velix_agent.tools.base import Tool
 
 
 class MockProvider(Provider):
@@ -13,7 +17,9 @@ class MockProvider(Provider):
     def __init__(self, model: str = "mock-model") -> None:
         self.model = model
 
-    def generate(self, messages: list[Message]) -> AgentResponse:
+    def generate(
+        self, messages: list[Message], tools: list["Tool"] | None = None
+    ) -> AgentResponse:
         if not messages:
             return AgentResponse(
                 text="Please provide a valid request.",
@@ -23,7 +29,12 @@ class MockProvider(Provider):
 
         content = messages[-1].content
         if isinstance(content, list):
-            from velix_agent.core.message import ErrorPart, TextPart
+            from velix_agent.core.message import ErrorPart, TextPart, ToolResultPart
+            results = [p for p in content if isinstance(p, ToolResultPart)]
+            if results:
+                res = results[-1]
+                text = f"Tool failed: {res.error}" if res.error else f"Tool succeeded: {res.data}"
+                return AgentResponse(text=text, metadata={"provider": "mock", "model": self.model})
 
             parts_text = []
             for p in content:
@@ -31,13 +42,35 @@ class MockProvider(Provider):
                     parts_text.append(p.text)
                 elif isinstance(p, ErrorPart):
                     parts_text.append(f"[Error: {p.error}]")
-            last_message = "\n".join(parts_text).strip().lower()
+            raw_last_message = "".join(parts_text).strip()
+            last_message = raw_last_message.lower()
         else:
-            last_message = content.strip().lower()
+            raw_last_message = content.strip()
+            last_message = raw_last_message.lower()
 
-        # Check context for name if asked
+        if raw_last_message.startswith("execute tool "):
+            parts = raw_last_message.split(" ", 3)
+            if len(parts) >= 4:
+                tool_name = parts[2]
+                arg_str = parts[3]
+                args = {}
+                matches = re.findall(r'(\w+)=("(?:[^"]*)"|[^,]+)', arg_str)
+                for k, v in matches:
+                    if v.startswith('"') and v.endswith('"'):
+                        v = v[1:-1]
+                    if "," in v:
+                        v = v.split(",")
+                    args[k] = v
+
+                from velix_agent.core.message import ToolCallPart
+                return AgentResponse(
+                    text="Invoking tool...",
+                    tool_calls=[ToolCallPart(tool_name=tool_name, args=args)],
+                    metadata={"provider": "mock", "model": self.model},
+                )
+
+        # Check context for name if asked        # Check context for name if asked
         if "what is my name" in last_message:
-            # search backwards in context for "My name is X"
             for msg in reversed(messages):
                 if msg.role == "user":
                     content = msg.content

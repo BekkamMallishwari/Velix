@@ -1,9 +1,12 @@
 """Provider registry and factory."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from velix_agent.core.config import VelixConfig
 from velix_agent.providers.base import Provider
+
+if TYPE_CHECKING:
+    pass
 
 
 def _get_secret(secret: Any) -> str:

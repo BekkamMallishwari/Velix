@@ -80,7 +80,14 @@ def test_gemini_provider_retry_success(monkeypatch) -> None:
 
     # First two calls fail with 503, third succeeds
     mock_response = MagicMock()
-    mock_response.text = "Success after retry"
+    mock_part = MagicMock()
+    mock_part.function_call = None
+    mock_part.text = "Success after retry"
+    mock_content = MagicMock()
+    mock_content.parts = [mock_part]
+    mock_candidate = MagicMock()
+    mock_candidate.content = mock_content
+    mock_response.candidates = [mock_candidate]
     mock_response.usage_metadata.prompt_token_count = 5
     mock_response.usage_metadata.candidates_token_count = 5
     mock_response.usage_metadata.total_token_count = 10
@@ -128,7 +135,14 @@ def test_gemini_provider_fallback(monkeypatch) -> None:
 
     # All 4 regular attempts fail with 503. The 5th attempt (fallback) succeeds.
     mock_response = MagicMock()
-    mock_response.text = "Success on fallback"
+    mock_part = MagicMock()
+    mock_part.function_call = None
+    mock_part.text = "Success on fallback"
+    mock_content = MagicMock()
+    mock_content.parts = [mock_part]
+    mock_candidate = MagicMock()
+    mock_candidate.content = mock_content
+    mock_response.candidates = [mock_candidate]
     mock_response.usage_metadata.prompt_token_count = 5
     mock_response.usage_metadata.candidates_token_count = 5
     mock_response.usage_metadata.total_token_count = 10

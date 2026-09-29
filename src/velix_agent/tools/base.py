@@ -38,6 +38,24 @@ class Tool(abc.ABC):
         """A clear description of what the tool does."""
         pass
 
+    @property
+    @abc.abstractmethod
+    def parameters(self) -> dict[str, Any]:
+        """JSON-Schema-compatible parameter schema for this tool.
+
+        Must be an ``object`` schema with at least ``type`` and ``properties``.
+        Example::
+
+            {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "..."},
+                },
+                "required": ["file_path"],
+            }
+        """
+        pass
+
     @abc.abstractmethod
     def execute(self, **kwargs: Any) -> ToolResult:
         """Execute the tool with the given arguments."""

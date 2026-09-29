@@ -2,13 +2,16 @@
 
 import base64
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import openai
 
 from velix_agent.core.message import DocumentPart, ErrorPart, ImagePart, Message, TextPart
 from velix_agent.core.response import AgentResponse
 from velix_agent.providers.base import Provider
+
+if TYPE_CHECKING:
+    from velix_agent.tools.base import Tool
 from velix_agent.providers.errors import (
     ProviderAPIError,
     ProviderAuthError,
@@ -32,7 +35,9 @@ class OpenAIProvider(Provider):
         self.model = model
         self.fallback_model = fallback_model
 
-    def generate(self, messages: list[Message]) -> AgentResponse:
+    def generate(
+        self, messages: list[Message], tools: list["Tool"] | None = None
+    ) -> AgentResponse:
         openai_messages: list[dict[str, Any]] = []
 
         for msg in messages:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 MessageRole = Literal["system", "user", "assistant"]
 
@@ -44,6 +44,26 @@ class ErrorPart(MessagePart):
     """Represents a failure to fetch or parse a part (e.g., dead URL)."""
 
     error: str
+
+
+@dataclass(frozen=True)
+class ToolCallPart(MessagePart):
+    """A tool call request from the model."""
+
+    tool_name: str
+    args: dict[str, Any] = field(default_factory=dict)
+    id: str | None = None
+    thought_signature: str | bytes | None = None
+
+
+@dataclass(frozen=True)
+class ToolResultPart(MessagePart):
+    """The result of executing a tool call."""
+
+    tool_name: str
+    data: Any = None
+    error: str | None = None
+    tool_call_id: str | None = None
 
 
 @dataclass

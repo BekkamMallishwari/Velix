@@ -1,10 +1,15 @@
 """Anthropic provider implementation."""
 
+from typing import TYPE_CHECKING
+
 import anthropic
 
 from velix_agent.core.message import Message
 from velix_agent.core.response import AgentResponse
 from velix_agent.providers.base import Provider
+
+if TYPE_CHECKING:
+    from velix_agent.tools.base import Tool
 from velix_agent.providers.errors import ProviderAPIError
 
 
@@ -15,7 +20,9 @@ class AnthropicProvider(Provider):
         self.client = anthropic.Anthropic(api_key=api_key)
         self.model = model
 
-    def generate(self, messages: list[Message]) -> AgentResponse:
+    def generate(
+        self, messages: list[Message], tools: list["Tool"] | None = None
+    ) -> AgentResponse:
         system_instruction = ""
         anthropic_messages = []
 

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from velix_agent.core.message import ToolCallPart
 
 ResponseStatus = Literal["success", "error"]
 
@@ -16,6 +19,7 @@ class AgentResponse:
     status: ResponseStatus = "success"
     metadata: dict[str, str] = field(default_factory=dict)
     error: str | None = None
+    tool_calls: list[ToolCallPart] | None = None
 
     def __post_init__(self) -> None:
         if self.status not in ("success", "error"):

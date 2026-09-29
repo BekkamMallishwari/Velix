@@ -25,6 +25,20 @@ class RunCommandTool(Tool):
     def description(self) -> str:
         return "Executes a shell command safely within the configured sandbox."
 
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The command and its arguments as a list of strings, e.g. ['ls', '-la'].",
+                },
+            },
+            "required": ["command"],
+        }
+
     def execute(self, **kwargs: Any) -> ToolResult:
         command = kwargs.get("command")
         if not command:

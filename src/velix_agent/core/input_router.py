@@ -74,6 +74,9 @@ class InputRouter:
         cls, user_input: str, max_size: int = 15 * 1024 * 1024, cwd: Path | None = None
     ) -> list[MessagePart]:
         """Parse raw text into multimodal parts (Text, Images, Documents)."""
+        if user_input.strip().startswith("execute tool "):
+            return [TextPart(text=user_input)]
+
         parts: list[MessagePart] = []
 
         last_idx = 0

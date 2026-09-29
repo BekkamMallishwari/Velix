@@ -31,10 +31,32 @@ class Runtime:
     agent: Agent = field(init=False)
 
     def __post_init__(self) -> None:
+        import os
+        from pathlib import Path
+
         from velix_agent.providers.factory import get_provider
+        from velix_agent.sandbox.manager import SandboxManager
+        from velix_agent.tools.edit_file import EditFileTool
+        from velix_agent.tools.list_directory import ListDirectoryTool
+        from velix_agent.tools.read_file import ReadFileTool
+        from velix_agent.tools.registry import ToolRegistry
+        from velix_agent.tools.run_command import RunCommandTool
+        from velix_agent.tools.write_file import WriteFileTool
 
         provider = get_provider(self.config)
-        self.agent = Agent(self.session, provider)
+
+        tool_registry = ToolRegistry()
+        workspace_root = Path(os.getcwd()).resolve()
+
+        tool_registry.register(ReadFileTool(workspace_root=workspace_root))
+        tool_registry.register(WriteFileTool(workspace_root=workspace_root))
+        tool_registry.register(EditFileTool(workspace_root=workspace_root))
+        tool_registry.register(ListDirectoryTool(workspace_root=workspace_root))
+
+        sandbox = SandboxManager()
+        tool_registry.register(RunCommandTool(sandbox=sandbox, workspace_root=workspace_root))
+
+        self.agent = Agent(self.session, provider, tool_registry=tool_registry)
 
     @property
     def debug(self) -> bool:
