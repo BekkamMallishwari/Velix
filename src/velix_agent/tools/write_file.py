@@ -57,25 +57,8 @@ class WriteFileTool(Tool):
             )
 
         try:
-            target_path = Path(file_path_str)
-            if not target_path.is_absolute():
-                target_path = self.workspace_root / target_path
-
-            target_path = target_path.resolve()
-
-            # Prevent traversal outside workspace
-            if not target_path.is_relative_to(self.workspace_root):
-                return ToolResult(
-                    status="error",
-                    error=f"Access denied: {file_path_str} is outside the allowed workspace.",
-                )
-
-            # Prevent writing to or inside .git
-            if ".git" in target_path.parts:
-                return ToolResult(
-                    status="error",
-                    error="Access denied: Cannot write to protected .git paths.",
-                )
+            from velix_agent.utils.paths import resolve_safe_path
+            target_path = resolve_safe_path(self.workspace_root, file_path_str, is_write=True)
 
             if target_path.exists() and target_path.is_dir():
                 return ToolResult(
@@ -92,7 +75,10 @@ class WriteFileTool(Tool):
                 data={"message": f"Successfully wrote to {file_path_str}", "size": len(content)}
             )
 
-        except PermissionError:
+        except PermissionError as e:
+            msg = str(e)
+            if "Access denied" in msg:
+                return ToolResult(status="error", error=msg)
             return ToolResult(
                 status="error", error=f"Permission denied writing file: {file_path_str}"
             )

@@ -39,14 +39,14 @@ class MacOSSandboxBackend(SandboxBackend):
 
         workspace_path = policy.workspace_root.resolve().as_posix()
         profile.append(f'(allow file-read* file-write* (subpath "{workspace_path}"))')
-        profile.append(f'(deny file-write* (subpath "{workspace_path}/.git"))')
+        profile.append(f'(deny file-read* file-write* (subpath "{workspace_path}/.git"))')
 
         if not policy.allow_network:
             profile.append("(deny network*)")
 
         return "\n".join(profile)
 
-    def execute(self, command: list[str], policy: SandboxPolicy) -> SandboxResult:
+    def execute(self, command: list[str], policy: SandboxPolicy, timeout: int = 30) -> SandboxResult:
         import platform
 
         if platform.system() != "Darwin":
@@ -74,7 +74,7 @@ class MacOSSandboxBackend(SandboxBackend):
                 text=True,
                 env=env,
                 cwd=policy.workspace_root.as_posix(),
-                timeout=30,
+                timeout=timeout,
             )
 
             return SandboxResult(

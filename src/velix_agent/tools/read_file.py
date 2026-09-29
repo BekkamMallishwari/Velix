@@ -43,19 +43,8 @@ class ReadFileTool(Tool):
             )
 
         try:
-            # We assume file_path could be absolute or relative to workspace root
-            target_path = Path(file_path_str)
-            if not target_path.is_absolute():
-                target_path = self.workspace_root / target_path
-
-            target_path = target_path.resolve()
-
-            # Prevent traversal outside workspace
-            if not target_path.is_relative_to(self.workspace_root):
-                return ToolResult(
-                    status="error",
-                    error=f"Access denied: {file_path_str} is outside the allowed workspace.",
-                )
+            from velix_agent.utils.paths import resolve_safe_path
+            target_path = resolve_safe_path(self.workspace_root, file_path_str)
 
             if not target_path.exists():
                 return ToolResult(
@@ -71,7 +60,10 @@ class ReadFileTool(Tool):
             content = target_path.read_text(encoding="utf-8")
             return ToolResult(status="success", data={"content": content})
 
-        except PermissionError:
+        except PermissionError as e:
+            msg = str(e)
+            if "Access denied" in msg:
+                return ToolResult(status="error", error=msg)
             return ToolResult(
                 status="error", error=f"Permission denied reading file: {file_path_str}"
             )

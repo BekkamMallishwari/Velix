@@ -22,7 +22,7 @@ class SandboxManager:
         else:
             self.backend = backend
 
-    def execute(self, command: list[str], workspace_root: str | Path) -> SandboxResult:
+    def execute(self, command: list[str], workspace_root: str | Path, timeout: int = 30) -> SandboxResult:
         if self.backend is None:
             raise SandboxError(f"Sandbox backend unavailable for platform: {platform.system()}")
 
@@ -31,4 +31,4 @@ class SandboxManager:
             raise SandboxError(f"Invalid workspace root: {root}")
 
         policy = SandboxPolicy(workspace_root=root, allow_network=False)
-        return self.backend.execute(command, policy)
+        return self.backend.execute(command, policy, timeout=timeout)
