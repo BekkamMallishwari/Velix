@@ -115,6 +115,23 @@ def test_read_file_tool_traversal(workspace, tmp_path):
     assert "outside the allowed workspace" in result2.error
 
 
+def test_read_file_tool_empty(workspace):
+    test_file = workspace / "empty.txt"
+    test_file.write_text("")
+    tool = ReadFileTool(workspace_root=workspace)
+    result = tool.execute(file_path="empty.txt")
+    assert result.status == "success"
+    assert result.data["content"] == ""
+
+def test_read_file_tool_unicode(workspace):
+    test_file = workspace / "unicode.txt"
+    test_file.write_text("hello 🌍", encoding="utf-8")
+    tool = ReadFileTool(workspace_root=workspace)
+    result = tool.execute(file_path="unicode.txt")
+    assert result.status == "success"
+    assert result.data["content"] == "hello 🌍"
+
+
 # --- Test ListDirectoryTool ---
 
 
@@ -161,6 +178,25 @@ def test_list_directory_tool_traversal(workspace, tmp_path):
     result = tool.execute(dir_path="..")
     assert result.status == "error"
     assert "outside the allowed workspace" in result.error
+
+def test_list_directory_tool_nested(workspace):
+    nested = workspace / "a" / "b"
+    nested.mkdir(parents=True)
+    (nested / "file.txt").touch()
+    tool = ListDirectoryTool(workspace_root=workspace)
+    result = tool.execute(dir_path="a/b")
+    assert result.status == "success"
+    assert len(result.data["items"]) == 1
+    assert result.data["items"][0]["name"] == "file.txt"
+
+def test_list_directory_tool_git_protection(workspace):
+    git_dir = workspace / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").touch()
+    tool = ListDirectoryTool(workspace_root=workspace)
+    result = tool.execute(dir_path=".git")
+    assert result.status == "error"
+    assert "protected .git paths" in result.error
 
 
 # --- Test RunCommandTool ---
@@ -209,3 +245,24 @@ def test_tool_registry():
 
     with pytest.raises(ValueError, match="already registered"):
         registry.register(tool)
+
+def test_tool_registry_unknown():
+    registry = ToolRegistry()
+    assert registry.get_tool("missing_tool") is None
+
+def test_tool_registry_builtins():
+    registry = ToolRegistry()
+    from velix_agent.tools.read_file import ReadFileTool
+    from velix_agent.tools.write_file import WriteFileTool
+    from velix_agent.tools.edit_file import EditFileTool
+    from velix_agent.tools.list_directory import ListDirectoryTool
+    from velix_agent.tools.run_command import RunCommandTool
+
+    registry.register(ReadFileTool(workspace_root="/tmp"))
+    registry.register(WriteFileTool(workspace_root="/tmp"))
+    registry.register(EditFileTool(workspace_root="/tmp"))
+    registry.register(ListDirectoryTool(workspace_root="/tmp"))
+
+    tools = registry.list_tools()
+    names = {t.name for t in tools}
+    assert {"read_file", "write_file", "edit_file", "list_directory"}.issubset(names)
