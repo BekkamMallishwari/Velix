@@ -7,8 +7,49 @@ from velix_agent.core.response import AgentResponse
 from velix_agent.core.session import Session
 from velix_agent.providers.base import Provider
 from velix_agent.tools.registry import ToolRegistry
+from velix_agent.tools.base import ToolResult
 
 logger = get_logger("agent")
+
+def _truncate_string(s: str, max_size: int, keep_end: bool = False) -> str:
+    """Truncates a string if it exceeds max_size, leaving a marker."""
+    if len(s) <= max_size:
+        return s
+
+    trunc_msg = "\n...[Output truncated due to size limit]...\n"
+    actual_max = max_size - len(trunc_msg)
+    if actual_max <= 0:
+        return trunc_msg
+
+    if keep_end:
+        return trunc_msg + s[-actual_max:]
+    else:
+        return s[:actual_max] + trunc_msg
+
+def _truncate_tool_result(res: ToolResult, max_size: int) -> ToolResult:
+    """Safely limits the size of fields in a ToolResult."""
+    import copy
+
+    if res.status == "error" and res.error:
+        truncated_error = _truncate_string(res.error, max_size, keep_end=True)
+        return ToolResult(status=res.status, data=res.data, error=truncated_error, metadata=res.metadata)
+    elif res.data and isinstance(res.data, dict):
+        # We must copy the dict to avoid modifying original frozen data references
+        new_data = copy.deepcopy(res.data)
+        changed = False
+        # Truncate specific known fields that can be large
+        if "content" in new_data and isinstance(new_data["content"], str):
+            new_data["content"] = _truncate_string(new_data["content"], max_size, keep_end=False)
+            changed = True
+        if "stdout" in new_data and isinstance(new_data["stdout"], str):
+            new_data["stdout"] = _truncate_string(new_data["stdout"], max_size, keep_end=False)
+            changed = True
+        if "stderr" in new_data and isinstance(new_data["stderr"], str):
+            new_data["stderr"] = _truncate_string(new_data["stderr"], max_size, keep_end=True)
+            changed = True
+        if changed:
+            return ToolResult(status=res.status, data=new_data, error=res.error, metadata=res.metadata)
+    return res
 
 
 class Agent:
@@ -104,6 +145,8 @@ class Agent:
 
                     try:
                         res = tool.execute(**tc.args)
+                        res = _truncate_tool_result(res, config.max_tool_output_size)
+
                         if res.status == "error":
                             tool_results.append(
                                 ToolResultPart(tool_name=tc.tool_name, error=res.error, tool_call_id=tc.id)

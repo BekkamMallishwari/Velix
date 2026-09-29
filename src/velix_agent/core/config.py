@@ -41,6 +41,10 @@ class VelixConfig(BaseSettings):
         default=15 * 1024 * 1024,
         description="Maximum file size in bytes for multimodal inputs (default 15MB)",
     )
+    max_tool_output_size: int = Field(
+        default=8000,
+        description="Maximum length of tool output strings (stdout, stderr, file content) to send to the provider.",
+    )
 
     # --- History -----------------------------------------------------------
     history_enabled: bool = Field(default=True, description="Enable persistent REPL history")
