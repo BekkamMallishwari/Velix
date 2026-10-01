@@ -42,6 +42,8 @@ class ListDirectoryTool(Tool):
         dir_path_str = kwargs.get("dir_path")
         if not dir_path_str:
             return ToolResult(status="error", error="Missing required argument: 'dir_path'")
+        if not isinstance(dir_path_str, str):
+            return ToolResult(status="error", error="Argument 'dir_path' must be a string.")
 
         try:
             from velix_agent.utils.paths import resolve_safe_path

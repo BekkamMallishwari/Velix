@@ -50,6 +50,11 @@ class RunCommandTool(Tool):
                 status="error",
                 error="'command' must be a list of strings (e.g. ['ls', '-la']).",
             )
+        if not all(isinstance(c, str) for c in command):
+            return ToolResult(
+                status="error",
+                error="Every element of 'command' must be a string.",
+            )
 
         try:
             # We strictly pass the command to the sandbox manager

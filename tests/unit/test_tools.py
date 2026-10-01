@@ -254,18 +254,36 @@ def test_tool_registry_unknown():
     assert registry.get_tool("missing_tool") is None
 
 
-def test_tool_registry_builtins():
+def test_tool_registry_builtins(tmp_path):
     registry = ToolRegistry()
     from velix_agent.tools.edit_file import EditFileTool
     from velix_agent.tools.list_directory import ListDirectoryTool
     from velix_agent.tools.read_file import ReadFileTool
     from velix_agent.tools.write_file import WriteFileTool
 
-    registry.register(ReadFileTool(workspace_root="/tmp"))
-    registry.register(WriteFileTool(workspace_root="/tmp"))
-    registry.register(EditFileTool(workspace_root="/tmp"))
-    registry.register(ListDirectoryTool(workspace_root="/tmp"))
+    registry.register(ReadFileTool(workspace_root=tmp_path))
+    registry.register(WriteFileTool(workspace_root=tmp_path))
+    registry.register(EditFileTool(workspace_root=tmp_path))
+    registry.register(ListDirectoryTool(workspace_root=tmp_path))
 
     tools = registry.list_tools()
     names = {t.name for t in tools}
     assert {"read_file", "write_file", "edit_file", "list_directory"}.issubset(names)
+
+
+def test_list_directory_tool_invalid_arg_type(workspace):
+    tool = ListDirectoryTool(workspace_root=workspace)
+    result = tool.execute(dir_path=123)
+    assert result.status == "error"
+    assert "must be a string" in result.error
+
+
+def test_run_command_tool_non_string_elements(workspace):
+    mock_sandbox = MockSandboxManager()
+    tool = RunCommandTool(sandbox=mock_sandbox, workspace_root=workspace)
+    # A mixed list where one element is not a string
+    result = tool.execute(command=["echo", 123])
+    assert result.status == "error"
+    assert "Every element" in result.error
+    # Confirm the sandbox was never reached
+    assert mock_sandbox.last_command is None
