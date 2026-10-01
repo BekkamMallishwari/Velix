@@ -87,3 +87,117 @@ def test_runtime_injects_tools() -> None:
     # Verify sandbox is preserved
     assert hasattr(run_cmd, "sandbox")
     assert isinstance(run_cmd.sandbox, SandboxManager)
+
+
+def test_agent_tool_error_recovery() -> None:
+    """Test that agent continues executing tools after a tool error."""
+    from typing import Any
+
+    from velix_agent.core.message import Message, ToolCallPart, ToolResultPart
+    from velix_agent.core.response import AgentResponse
+    from velix_agent.providers.base import Provider
+    from velix_agent.tools.base import Tool, ToolResult
+    from velix_agent.tools.registry import ToolRegistry
+
+    class SequentialProvider(Provider):
+        def __init__(self) -> None:
+            self.call_count = 0
+            self.history: list[list[Message]] = []
+
+        def generate(
+            self, messages: list[Message], tools: list[Tool] | None = None
+        ) -> AgentResponse:
+            self.call_count += 1
+            self.history.append(messages)
+            if self.call_count == 1:
+                return AgentResponse(
+                    text="Calling tool 1",
+                    status="success",
+                    tool_calls=[
+                        ToolCallPart(
+                            tool_name="fake_tool", args={"action": "succeed_1"}, id="call_1"
+                        )
+                    ],
+                )
+            elif self.call_count == 2:
+                return AgentResponse(
+                    text="Calling tool 2",
+                    status="success",
+                    tool_calls=[
+                        ToolCallPart(tool_name="fake_tool", args={"action": "fail_2"}, id="call_2")
+                    ],
+                )
+            elif self.call_count == 3:
+                return AgentResponse(
+                    text="Calling tool 3",
+                    status="success",
+                    tool_calls=[
+                        ToolCallPart(
+                            tool_name="fake_tool", args={"action": "succeed_3"}, id="call_3"
+                        )
+                    ],
+                )
+            else:
+                return AgentResponse(text="Done", status="success")
+
+    class FakeTool(Tool):
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        @property
+        def name(self) -> str:
+            return "fake_tool"
+
+        @property
+        def description(self) -> str:
+            return "Fake tool"
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return {
+                "type": "object",
+                "properties": {"action": {"type": "string"}},
+                "required": ["action"],
+            }
+
+        def execute(self, **kwargs: Any) -> ToolResult:
+            action = kwargs.get("action", "")
+            self.calls.append(action)
+            if action == "fail_2":
+                return ToolResult(status="error", error="Intentional failure")
+            return ToolResult(status="success", data=f"Success {action}")
+
+    fake_tool = FakeTool()
+    registry = ToolRegistry()
+    registry.register(fake_tool)
+
+    session = Session.create()
+    provider = SequentialProvider()
+    agent = Agent(session, provider=provider, tool_registry=registry)
+
+    response = agent.respond("Start tool sequence")
+
+    # Assert final response
+    assert response.status == "success"
+    assert response.text == "Done"
+
+    # Assert provider called exactly 4 times
+    assert provider.call_count == 4
+
+    # Assert tool executed exactly 3 times in correct order
+    assert len(fake_tool.calls) == 3
+    assert fake_tool.calls == ["succeed_1", "fail_2", "succeed_3"]
+
+    # Verify that the tool error was properly fed back into the context
+    context_msgs = session.context.get_messages()
+
+    # Check that there is a ToolResultPart with error="Intentional failure"
+    found_error_part = False
+    for msg in context_msgs:
+        if msg.role == "user" and isinstance(msg.content, list):
+            for part in msg.content:
+                if isinstance(part, ToolResultPart) and part.error == "Intentional failure":
+                    found_error_part = True
+                    break
+
+    assert found_error_part, "Expected to find the failed tool result fed back to the context"
