@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from velix_agent.core.logging import get_logger
 from velix_agent.core.response import AgentResponse
 from velix_agent.core.session import Session
@@ -139,9 +141,19 @@ class Agent:
                 new_messages.append(Message(role="assistant", content=assistant_parts))
 
                 tool_results: list[MessagePart] = []
+
                 for tc in response.tool_calls:
+                    start_time = time.perf_counter()
                     tool = self.tool_registry.get_tool(tc.tool_name)
                     if tool is None:
+                        duration = time.perf_counter() - start_time
+                        logger.debug(
+                            "Tool execution: name=%s id=%s status=error duration=%.3fs error=%r",
+                            tc.tool_name,
+                            tc.id,
+                            duration,
+                            "Unknown tool",
+                        )
                         tool_results.append(
                             ToolResultPart(
                                 tool_name=tc.tool_name,
@@ -153,33 +165,66 @@ class Agent:
 
                     try:
                         res = tool.execute(**tc.args)
+                        duration = time.perf_counter() - start_time
                         res = _truncate_tool_result(res, config.max_tool_output_size)
 
                         if res.status == "error":
+                            logger.debug(
+                                "Tool execution: name=%s id=%s status=error "
+                                "duration=%.3fs error=%r",
+                                tc.tool_name,
+                                tc.id,
+                                duration,
+                                res.error,
+                            )
                             tool_results.append(
                                 ToolResultPart(
                                     tool_name=tc.tool_name, error=res.error, tool_call_id=tc.id
                                 )
                             )
                         else:
+                            logger.debug(
+                                "Tool execution: name=%s id=%s status=success duration=%.3fs",
+                                tc.tool_name,
+                                tc.id,
+                                duration,
+                            )
                             tool_results.append(
                                 ToolResultPart(
                                     tool_name=tc.tool_name, data=res.data, tool_call_id=tc.id
                                 )
                             )
                     except TypeError as e:
+                        duration = time.perf_counter() - start_time
+                        error_msg = f"Invalid arguments: {e}"
+                        logger.debug(
+                            "Tool execution: name=%s id=%s status=error duration=%.3fs error=%r",
+                            tc.tool_name,
+                            tc.id,
+                            duration,
+                            error_msg,
+                        )
                         tool_results.append(
                             ToolResultPart(
                                 tool_name=tc.tool_name,
-                                error=f"Invalid arguments: {e}",
+                                error=error_msg,
                                 tool_call_id=tc.id,
                             )
                         )
                     except Exception as e:
+                        duration = time.perf_counter() - start_time
+                        error_msg = f"Execution error: {e}"
+                        logger.debug(
+                            "Tool execution: name=%s id=%s status=error duration=%.3fs error=%r",
+                            tc.tool_name,
+                            tc.id,
+                            duration,
+                            error_msg,
+                        )
                         tool_results.append(
                             ToolResultPart(
                                 tool_name=tc.tool_name,
-                                error=f"Execution error: {e}",
+                                error=error_msg,
                                 tool_call_id=tc.id,
                             )
                         )

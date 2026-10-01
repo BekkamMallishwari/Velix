@@ -1,5 +1,7 @@
 """Unit tests for the Agent Core."""
 
+from typing import Any
+
 from velix_agent.core.agent import Agent
 from velix_agent.core.session import Session
 from velix_agent.providers.mock import MockProvider
@@ -201,3 +203,147 @@ def test_agent_tool_error_recovery() -> None:
                     break
 
     assert found_error_part, "Expected to find the failed tool result fed back to the context"
+
+
+def test_agent_tool_logging_success(caplog: Any) -> None:
+    """Test that successful tool executions are logged correctly without exposing secrets."""
+    import logging
+
+    from velix_agent.core.message import Message, ToolCallPart
+    from velix_agent.core.response import AgentResponse
+    from velix_agent.providers.base import Provider
+    from velix_agent.tools.base import Tool, ToolResult
+    from velix_agent.tools.registry import ToolRegistry
+
+    class SingleToolProvider(Provider):
+        def __init__(self) -> None:
+            self.called = False
+
+        def generate(
+            self, messages: list[Message], tools: list[Tool] | None = None
+        ) -> AgentResponse:
+            if not self.called:
+                self.called = True
+                return AgentResponse(
+                    text="Calling tool",
+                    status="success",
+                    tool_calls=[
+                        ToolCallPart(
+                            tool_name="test_tool",
+                            args={"secret_key": "super_secret_123"},
+                            id="call_999",
+                        )
+                    ],
+                )
+            return AgentResponse(text="Done", status="success")
+
+    class TestTool(Tool):
+        @property
+        def name(self) -> str:
+            return "test_tool"
+
+        @property
+        def description(self) -> str:
+            return "Test tool"
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return {"type": "object", "properties": {"secret_key": {"type": "string"}}}
+
+        def execute(self, **kwargs: Any) -> ToolResult:
+            return ToolResult(status="success", data="Done")
+
+    registry = ToolRegistry()
+    registry.register(TestTool())
+    session = Session.create()
+    agent = Agent(session, provider=SingleToolProvider(), tool_registry=registry)
+
+    from unittest.mock import patch
+
+    with (
+        patch("time.perf_counter", side_effect=[100.0, 101.5]),
+        caplog.at_level(logging.DEBUG, logger="velix_agent.agent"),
+    ):
+        agent.respond("Test logging")
+
+    # Assert success log is present
+    logs = [rec.message for rec in caplog.records if "Tool execution:" in rec.message]
+    assert len(logs) == 1
+    msg = logs[0]
+
+    assert "name=test_tool" in msg
+    assert "id=call_999" in msg
+    assert "status=success" in msg
+    assert "duration=1.500s" in msg
+    assert "super_secret_123" not in msg
+
+
+def test_agent_tool_logging_error(caplog: Any) -> None:
+    """Test that failed tool executions log the error."""
+    import logging
+
+    from velix_agent.core.message import Message, ToolCallPart
+    from velix_agent.core.response import AgentResponse
+    from velix_agent.providers.base import Provider
+    from velix_agent.tools.base import Tool, ToolResult
+    from velix_agent.tools.registry import ToolRegistry
+
+    class ErrorToolProvider(Provider):
+        def __init__(self) -> None:
+            self.called = False
+
+        def generate(
+            self, messages: list[Message], tools: list[Tool] | None = None
+        ) -> AgentResponse:
+            if not self.called:
+                self.called = True
+                return AgentResponse(
+                    text="Calling error tool",
+                    status="success",
+                    tool_calls=[
+                        ToolCallPart(
+                            tool_name="error_tool", args={"param": "value"}, id="call_error"
+                        )
+                    ],
+                )
+            return AgentResponse(text="Done", status="success")
+
+    class ErrorTool(Tool):
+        @property
+        def name(self) -> str:
+            return "error_tool"
+
+        @property
+        def description(self) -> str:
+            return "Error tool"
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return {"type": "object", "properties": {"param": {"type": "string"}}}
+
+        def execute(self, **kwargs: Any) -> ToolResult:
+            return ToolResult(status="error", error="A predictable failure.")
+
+    registry = ToolRegistry()
+    registry.register(ErrorTool())
+    session = Session.create()
+    agent = Agent(session, provider=ErrorToolProvider(), tool_registry=registry)
+
+    from unittest.mock import patch
+
+    with (
+        patch("time.perf_counter", side_effect=[100.0, 102.5]),
+        caplog.at_level(logging.DEBUG, logger="velix_agent.agent"),
+    ):
+        agent.respond("Test error logging")
+
+    # Assert error log is present
+    logs = [rec.message for rec in caplog.records if "Tool execution:" in rec.message]
+    assert len(logs) == 1
+    msg = logs[0]
+
+    assert "name=error_tool" in msg
+    assert "id=call_error" in msg
+    assert "status=error" in msg
+    assert "duration=2.500s" in msg
+    assert "'A predictable failure.'" in msg
