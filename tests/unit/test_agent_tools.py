@@ -193,3 +193,129 @@ def test_agent_max_iterations():
     assert resp.status == "error"
     assert resp.error == "Max iterations reached."
     assert tool.call_count == 5  # MAX_ITERATIONS is 5
+
+
+def test_agent_multiple_tool_calls_in_one_response():
+    """Provider returns two ToolCallParts in a single response.
+
+    Both tools must execute exactly once, their results must be returned in the
+    same user message, and both tool_call_ids must be preserved.
+    Context layout expected:
+        msgs[0]  user  (original request)
+        msgs[1]  assistant  (tool calls A + B)
+        msgs[2]  user  (tool results for A and B)
+        msgs[3]  assistant  (final answer)
+    """
+    tool_a = DummyTool("tool_a")
+    tool_b = DummyTool("tool_b")
+    registry = ToolRegistry()
+    registry.register(tool_a)
+    registry.register(tool_b)
+
+    provider = DummyProvider(
+        [
+            AgentResponse(
+                text="Calling both tools",
+                tool_calls=[
+                    ToolCallPart(tool_name="tool_a", args={}, id="id_a"),
+                    ToolCallPart(tool_name="tool_b", args={}, id="id_b"),
+                ],
+            ),
+            AgentResponse(text="Both results received."),
+        ]
+    )
+
+    session = Session()
+    agent = Agent(session=session, provider=provider, tool_registry=registry)
+    resp = agent.respond("run both tools")
+
+    assert resp.status == "success"
+    assert resp.text == "Both results received."
+    assert provider.call_count == 2
+
+    # Both tools executed exactly once
+    assert tool_a.call_count == 1
+    assert tool_b.call_count == 1
+
+    msgs = session.context.get_messages()
+    assert len(msgs) == 4
+
+    # msgs[1] — assistant message contains both ToolCallParts
+    assistant_msg = msgs[1]
+    assert assistant_msg.role == "assistant"
+    tc_parts = [p for p in assistant_msg.content if isinstance(p, ToolCallPart)]
+    assert len(tc_parts) == 2
+    tc_names = {p.tool_name for p in tc_parts}
+    assert tc_names == {"tool_a", "tool_b"}
+
+    # msgs[2] — user message contains both ToolResultParts
+    result_msg = msgs[2]
+    assert result_msg.role == "user"
+    tr_parts = [p for p in result_msg.content if isinstance(p, ToolResultPart)]
+    assert len(tr_parts) == 2
+
+    # Both tool_call_ids are preserved
+    result_ids = {p.tool_call_id for p in tr_parts}
+    assert result_ids == {"id_a", "id_b"}
+
+    # msgs[3] — final assistant message
+    assert msgs[3].role == "assistant"
+
+
+def test_agent_tool_call_id_preserved_in_result():
+    """The tool_call_id on ToolResultPart must exactly equal the id on ToolCallPart."""
+    specific_id = "abc-123-xyz"
+
+    tool = DummyTool("echo_tool")
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    provider = DummyProvider(
+        [
+            AgentResponse(
+                text="",
+                tool_calls=[ToolCallPart(tool_name="echo_tool", args={}, id=specific_id)],
+            ),
+            AgentResponse(text="Done."),
+        ]
+    )
+
+    session = Session()
+    agent = Agent(session=session, provider=provider, tool_registry=registry)
+    agent.respond("echo")
+
+    msgs = session.context.get_messages()
+    # msgs[2] is the user message carrying the tool result
+    result_msg = msgs[2]
+    assert result_msg.role == "user"
+    result_part = result_msg.content[0]
+    assert isinstance(result_part, ToolResultPart)
+    assert result_part.tool_call_id == specific_id
+
+
+def test_agent_context_unchanged_on_max_iterations():
+    """When MAX_ITERATIONS is exhausted, the session context must remain empty.
+
+    Partial tool-call rounds must not be committed to the context.
+    """
+    session = Session()
+    tool = DummyTool("loop_tool")
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    class InfiniteProvider(Provider):
+        def generate(self, messages, tools=None):
+            return AgentResponse(
+                text="looping", tool_calls=[ToolCallPart(tool_name="loop_tool", args={})]
+            )
+
+    agent = Agent(session=session, provider=InfiniteProvider(), tool_registry=registry)
+    resp = agent.respond("start loop")
+
+    # Failure response is correct
+    assert resp.status == "error"
+    assert resp.error == "Max iterations reached."
+    # Tool executed MAX_ITERATIONS times
+    assert tool.call_count == 5
+    # Context must be completely empty — no partial messages committed
+    assert session.context.get_messages() == []
