@@ -79,3 +79,70 @@ def test_existing_tool_errors_truncated():
     assert len(res_trunc.error) == max_size
     assert "[Output truncated" in res_trunc.error
     assert res_trunc.error.endswith("end")
+
+
+# --- Bare-string data ---
+
+
+def test_bare_string_data_below_limit_unchanged():
+    res = ToolResult(status="success", data="short string")
+    result = _truncate_tool_result(res, max_size=100)
+    assert result is res  # identity: no new object created
+
+
+def test_bare_string_data_exactly_at_limit_unchanged():
+    max_size = 50
+    res = ToolResult(status="success", data="a" * max_size)
+    result = _truncate_tool_result(res, max_size=max_size)
+    assert result is res  # at the boundary, no truncation
+
+
+def test_bare_string_data_above_limit_truncated():
+    max_size = 60
+    res = ToolResult(status="success", data="z" * 200)
+    result = _truncate_tool_result(res, max_size=max_size)
+    assert isinstance(result.data, str)
+    assert len(result.data) == max_size
+    assert "[Output truncated" in result.data
+    assert result.data.startswith("z")
+    assert result.status == "success"
+    assert result.error is None
+
+
+# --- data=None ---
+
+
+def test_data_none_returned_unchanged():
+    res = ToolResult(status="success", data=None)
+    result = _truncate_tool_result(res, max_size=100)
+    assert result is res  # identity: no new object created
+    assert result.data is None
+
+
+# --- Structured list values must not be modified ---
+
+
+def test_command_list_not_modified():
+    """RunCommandTool.data["command"] must pass through intact."""
+    command = ["git", "diff", "--stat"]
+    res = ToolResult(
+        status="success",
+        data={
+            "command": command,
+            "exit_code": 0,
+            "stdout": "x" * 5,
+            "stderr": "",
+            "success": True,
+        },
+    )
+    result = _truncate_tool_result(res, max_size=100)
+    assert result.data["command"] == command
+
+
+def test_items_list_not_modified():
+    """ListDirectoryTool.data["items"] must pass through intact."""
+    items = [{"name": f"file{i}.py", "type": "file"} for i in range(10)]
+    res = ToolResult(status="success", data={"items": items})
+    result = _truncate_tool_result(res, max_size=100)
+    assert result.data["items"] == items
+    assert result is res  # no dict keys touched → same object returned

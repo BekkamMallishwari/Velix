@@ -39,6 +39,13 @@ def _truncate_tool_result(res: ToolResult, max_size: int) -> ToolResult:
         return ToolResult(
             status=res.status, data=res.data, error=truncated_error, metadata=res.metadata
         )
+    elif isinstance(res.data, str):
+        # Bare string data: truncate keeping the head (same semantics as "content").
+        truncated_data = _truncate_string(res.data, max_size, keep_end=False)
+        if truncated_data is not res.data:
+            return ToolResult(
+                status=res.status, data=truncated_data, error=res.error, metadata=res.metadata
+            )
     elif res.data and isinstance(res.data, dict):
         # We must copy the dict to avoid modifying original frozen data references
         new_data = copy.deepcopy(res.data)
