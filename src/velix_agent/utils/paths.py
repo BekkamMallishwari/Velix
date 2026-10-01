@@ -56,7 +56,9 @@ def expand_path(path: Path | str) -> Path:
     return Path(path).expanduser().resolve()
 
 
-def resolve_safe_path(workspace_root: Path | str, target_path: Path | str, is_write: bool = False) -> Path:
+def resolve_safe_path(
+    workspace_root: Path | str, target_path: Path | str, is_write: bool = False
+) -> Path:
     """Resolve and validate a path against the workspace boundary and security rules.
 
     Raises PermissionError if the path violates security boundaries.
@@ -90,8 +92,12 @@ def resolve_safe_path(workspace_root: Path | str, target_path: Path | str, is_wr
     for sensitive in sensitive_paths:
         try:
             resolved_sensitive = sensitive.resolve()
-            if resolved_path == resolved_sensitive or resolved_path.is_relative_to(resolved_sensitive):
-                raise PermissionError(f"Access denied: Path intersects with sensitive location {sensitive}")
+            if resolved_path == resolved_sensitive or resolved_path.is_relative_to(
+                resolved_sensitive
+            ):
+                raise PermissionError(
+                    f"Access denied: Path intersects with sensitive location {sensitive}"
+                )
         except Exception:
             pass
 

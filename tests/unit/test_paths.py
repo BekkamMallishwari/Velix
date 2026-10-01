@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+import pytest
 
 from velix_agent.utils.paths import (
     ensure_parent_exists,
@@ -11,6 +14,7 @@ from velix_agent.utils.paths import (
     get_data_dir,
     get_default_history_file,
     get_history_dir,
+    resolve_safe_path,
 )
 
 
@@ -79,9 +83,6 @@ class TestEnsureParentExists:
         result = ensure_parent_exists(target)
         assert result is target
 
-import os
-import pytest
-from velix_agent.utils.paths import resolve_safe_path
 
 class TestResolveSafePath:
     @pytest.fixture
@@ -115,7 +116,9 @@ class TestResolveSafePath:
         with pytest.raises(PermissionError, match="outside the allowed workspace"):
             resolve_safe_path(workspace, str(outside))
 
-    def test_existing_symlink_pointing_outside_workspace_rejected(self, workspace: Path, tmp_path: Path) -> None:
+    def test_existing_symlink_pointing_outside_workspace_rejected(
+        self, workspace: Path, tmp_path: Path
+    ) -> None:
         outside = tmp_path / "outside.txt"
         outside.write_text("secret")
         symlink = workspace / "symlink.txt"
@@ -144,11 +147,11 @@ class TestResolveSafePath:
     def test_git_write_attempt_rejected(self, workspace: Path) -> None:
         git_dir = workspace / ".git"
         git_dir.mkdir()
-        with pytest.raises(PermissionError, match="Cannot access protected .git paths"):
+        with pytest.raises(PermissionError, match=r"Cannot access protected \.git paths"):
             resolve_safe_path(workspace, ".git/config", is_write=True)
 
     def test_git_read_attempt_rejected(self, workspace: Path) -> None:
         git_dir = workspace / ".git"
         git_dir.mkdir()
-        with pytest.raises(PermissionError, match="Cannot access protected .git paths"):
+        with pytest.raises(PermissionError, match=r"Cannot access protected \.git paths"):
             resolve_safe_path(workspace, ".git/config")

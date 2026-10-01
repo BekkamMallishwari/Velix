@@ -1,6 +1,5 @@
 """Registry for discovering and managing tools."""
 
-
 from velix_agent.tools.base import Tool
 
 

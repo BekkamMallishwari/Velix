@@ -1,4 +1,3 @@
-
 from velix_agent.sandbox.manager import SandboxManager
 from velix_agent.sandbox.result import SandboxError, SandboxResult
 from velix_agent.tools.edit_file import EditFileTool
@@ -38,6 +37,7 @@ def test_write_then_read(tmp_path):
     assert read_res.status == "success"
     assert read_res.data["content"] == "world"
 
+
 def test_write_edit_read(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -51,6 +51,7 @@ def test_write_edit_read(tmp_path):
     read_res = read_tool.execute(file_path="test.txt")
 
     assert read_res.data["content"] == "hello universe"
+
 
 def test_list_write_list(tmp_path):
     workspace = tmp_path / "workspace"
@@ -69,6 +70,7 @@ def test_list_write_list(tmp_path):
     items = sorted([item["name"] for item in res2.data["items"]])
     assert items == ["a.txt", "b.txt"]
 
+
 def test_run_command_workspace_integration(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -78,6 +80,7 @@ def test_run_command_workspace_integration(tmp_path):
 
     res = run_tool.execute(command=["ls", "-la"])
     assert res.status == "success"
+
 
 def test_failed_path_validation_then_valid(tmp_path):
     workspace = tmp_path / "workspace"
@@ -91,6 +94,7 @@ def test_failed_path_validation_then_valid(tmp_path):
     res2 = write_tool.execute(file_path="inside.txt", content="good")
     assert res2.status == "success"
     assert (workspace / "inside.txt").read_text() == "good"
+
 
 def test_failed_edit_leaves_file_unchanged(tmp_path):
     workspace = tmp_path / "workspace"

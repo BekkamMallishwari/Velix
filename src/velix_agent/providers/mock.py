@@ -17,9 +17,7 @@ class MockProvider(Provider):
     def __init__(self, model: str = "mock-model") -> None:
         self.model = model
 
-    def generate(
-        self, messages: list[Message], tools: list["Tool"] | None = None
-    ) -> AgentResponse:
+    def generate(self, messages: list[Message], tools: list["Tool"] | None = None) -> AgentResponse:
         if not messages:
             return AgentResponse(
                 text="Please provide a valid request.",
@@ -30,6 +28,7 @@ class MockProvider(Provider):
         content = messages[-1].content
         if isinstance(content, list):
             from velix_agent.core.message import ErrorPart, TextPart, ToolResultPart
+
             results = [p for p in content if isinstance(p, ToolResultPart)]
             if results:
                 res = results[-1]
@@ -63,6 +62,7 @@ class MockProvider(Provider):
                     args[k] = v
 
                 from velix_agent.core.message import ToolCallPart
+
                 return AgentResponse(
                     text="Invoking tool...",
                     tool_calls=[ToolCallPart(tool_name=tool_name, args=args)],

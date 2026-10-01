@@ -20,9 +20,7 @@ class AnthropicProvider(Provider):
         self.client = anthropic.Anthropic(api_key=api_key)
         self.model = model
 
-    def generate(
-        self, messages: list[Message], tools: list["Tool"] | None = None
-    ) -> AgentResponse:
+    def generate(self, messages: list[Message], tools: list["Tool"] | None = None) -> AgentResponse:
         system_instruction = ""
         anthropic_messages = []
 

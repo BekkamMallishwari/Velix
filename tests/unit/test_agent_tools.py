@@ -1,4 +1,3 @@
-
 from velix_agent.core.agent import Agent
 from velix_agent.core.message import ToolCallPart, ToolResultPart
 from velix_agent.core.response import AgentResponse
@@ -48,9 +47,7 @@ class DummyTool(Tool):
 
 def test_agent_normal_request_without_tools():
     session = Session()
-    provider = DummyProvider([
-        AgentResponse(text="Normal response")
-    ])
+    provider = DummyProvider([AgentResponse(text="Normal response")])
     agent = Agent(session=session, provider=provider)
 
     resp = agent.respond("hello")
@@ -72,13 +69,15 @@ def test_agent_successful_tool_invocation():
     registry = ToolRegistry()
     registry.register(tool)
 
-    provider = DummyProvider([
-        AgentResponse(
-            text="Let me check",
-            tool_calls=[ToolCallPart(tool_name="get_weather", args={"location": "Tokyo"})]
-        ),
-        AgentResponse(text="The weather in Tokyo is sunny.")
-    ])
+    provider = DummyProvider(
+        [
+            AgentResponse(
+                text="Let me check",
+                tool_calls=[ToolCallPart(tool_name="get_weather", args={"location": "Tokyo"})],
+            ),
+            AgentResponse(text="The weather in Tokyo is sunny."),
+        ]
+    )
 
     agent = Agent(session=session, provider=provider, tool_registry=registry)
     resp = agent.respond("What is the weather in Tokyo?")
@@ -99,13 +98,12 @@ def test_agent_successful_tool_invocation():
 
 def test_agent_unknown_tool():
     session = Session()
-    provider = DummyProvider([
-        AgentResponse(
-            text="",
-            tool_calls=[ToolCallPart(tool_name="unknown_tool", args={})]
-        ),
-        AgentResponse(text="I got an error about an unknown tool.")
-    ])
+    provider = DummyProvider(
+        [
+            AgentResponse(text="", tool_calls=[ToolCallPart(tool_name="unknown_tool", args={})]),
+            AgentResponse(text="I got an error about an unknown tool."),
+        ]
+    )
 
     agent = Agent(session=session, provider=provider)
     agent.respond("do something")
@@ -124,13 +122,12 @@ def test_agent_tool_failure():
     registry = ToolRegistry()
     registry.register(tool)
 
-    provider = DummyProvider([
-        AgentResponse(
-            text="",
-            tool_calls=[ToolCallPart(tool_name="failing_tool", args={})]
-        ),
-        AgentResponse(text="Tool failed gracefully.")
-    ])
+    provider = DummyProvider(
+        [
+            AgentResponse(text="", tool_calls=[ToolCallPart(tool_name="failing_tool", args={})]),
+            AgentResponse(text="Tool failed gracefully."),
+        ]
+    )
 
     agent = Agent(session=session, provider=provider, tool_registry=registry)
     agent.respond("run failing tool")
@@ -146,24 +143,29 @@ def test_agent_tool_exception():
 
     class ExceptionTool(Tool):
         @property
-        def name(self): return "exc_tool"
+        def name(self):
+            return "exc_tool"
+
         @property
-        def description(self): return ""
+        def description(self):
+            return ""
+
         @property
-        def parameters(self): return {"type": "object", "properties": {}}
+        def parameters(self):
+            return {"type": "object", "properties": {}}
+
         def execute(self, **kwargs):
             raise ValueError("Something crashed")
 
     registry = ToolRegistry()
     registry.register(ExceptionTool())
 
-    provider = DummyProvider([
-        AgentResponse(
-            text="",
-            tool_calls=[ToolCallPart(tool_name="exc_tool", args={})]
-        ),
-        AgentResponse(text="Tool raised exception.")
-    ])
+    provider = DummyProvider(
+        [
+            AgentResponse(text="", tool_calls=[ToolCallPart(tool_name="exc_tool", args={})]),
+            AgentResponse(text="Tool raised exception."),
+        ]
+    )
 
     agent = Agent(session=session, provider=provider, tool_registry=registry)
     agent.respond("crash")
@@ -182,8 +184,7 @@ def test_agent_max_iterations():
     class InfiniteProvider(Provider):
         def generate(self, messages, tools=None):
             return AgentResponse(
-                text="looping",
-                tool_calls=[ToolCallPart(tool_name="loop_tool", args={})]
+                text="looping", tool_calls=[ToolCallPart(tool_name="loop_tool", args={})]
             )
 
     agent = Agent(session=session, provider=InfiniteProvider(), tool_registry=registry)

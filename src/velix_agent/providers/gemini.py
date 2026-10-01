@@ -40,10 +40,12 @@ def _build_function_declaration(tool: "Tool") -> types.FunctionDeclaration:
     properties: dict[str, types.Schema] = {}
     for prop_name, prop_schema in params.get("properties", {}).items():
         # Map JSON schema type strings to Gemini Schema type strings (uppercase)
-        json_type = prop_schema.get("type", "string").upper()
+        json_type_str = prop_schema.get("type", "string").upper()
+        json_type = getattr(types.Type, json_type_str, types.Type.STRING)
         # Handle array type with items
-        if json_type == "ARRAY":
-            item_type = prop_schema.get("items", {}).get("type", "string").upper()
+        if json_type_str == "ARRAY":
+            item_type_str = prop_schema.get("items", {}).get("type", "string").upper()
+            item_type = getattr(types.Type, item_type_str, types.Type.STRING)
             properties[prop_name] = types.Schema(
                 type=json_type,
                 items=types.Schema(type=item_type),
@@ -56,7 +58,7 @@ def _build_function_declaration(tool: "Tool") -> types.FunctionDeclaration:
             )
 
     gemini_params = types.Schema(
-        type="OBJECT",
+        type=types.Type.OBJECT,
         properties=properties,
         required=params.get("required", []),
     )
@@ -92,9 +94,7 @@ class GeminiProvider(Provider):
         self.model = model
         self.fallback_model = fallback_model
 
-    def generate(
-        self, messages: list[Message], tools: list["Tool"] | None = None
-    ) -> AgentResponse:
+    def generate(self, messages: list[Message], tools: list["Tool"] | None = None) -> AgentResponse:
         system_instruction = None
         gemini_messages: list[types.Content] = []
 
@@ -123,38 +123,26 @@ class GeminiProvider(Provider):
                                 types.Part.from_bytes(data=part.data, mime_type=part.mime_type)
                             )
                         elif isinstance(part, ErrorPart):
-                            parts.append(
-                                types.Part.from_text(text=f"[System Note: {part.error}]")
-                            )
+                            parts.append(types.Part.from_text(text=f"[System Note: {part.error}]"))
                         elif isinstance(part, ToolCallPart):
                             # Assistant requested a tool call — replay as function_call part.
-                            fc = types.FunctionCall(
-                                name=part.tool_name,
-                                args=part.args,
-                                id=part.id
-                            )
-                            part_kwargs = {"function_call": fc}
+                            fc = types.FunctionCall(name=part.tool_name, args=part.args, id=part.id)
+                            part_kwargs: dict[str, Any] = {"function_call": fc}
                             if getattr(part, "thought_signature", None) is not None:
                                 part_kwargs["thought_signature"] = part.thought_signature
                             parts.append(types.Part(**part_kwargs))
                         elif isinstance(part, ToolResultPart):
                             # Tool result — replay as function_response part.
-                            response_value = _tool_result_to_response_value(
-                                part.data, part.error
-                            )
+                            response_value = _tool_result_to_response_value(part.data, part.error)
                             fr = types.FunctionResponse(
-                                name=part.tool_name,
-                                response=response_value,
-                                id=part.tool_call_id
+                                name=part.tool_name, response=response_value, id=part.tool_call_id
                             )
                             parts.append(types.Part(function_response=fr))
                 else:
                     parts.append(types.Part.from_text(text=msg.content))
 
                 if parts:
-                    gemini_messages.append(
-                        types.Content(role=gemini_role, parts=parts)
-                    )
+                    gemini_messages.append(types.Content(role=gemini_role, parts=parts))
 
         # Build config — disable automatic function calling so we drive the loop.
         config = types.GenerateContentConfig(
@@ -241,20 +229,29 @@ class GeminiProvider(Provider):
         content = ""
 
         # Manually parse candidates to avoid SDK warnings when non-text parts exist.
-        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+        if (
+            response.candidates
+            and response.candidates[0].content
+            and response.candidates[0].content.parts
+        ):
             extracted_tool_calls = []
-            for part in response.candidates[0].content.parts:
-                if part.function_call:
+            for gemini_part in response.candidates[0].content.parts:
+                if gemini_part.function_call:
+                    tool_name = gemini_part.function_call.name or "unknown_tool"
                     extracted_tool_calls.append(
                         ToolCallPart(
-                            tool_name=part.function_call.name,
-                            args=dict(part.function_call.args) if part.function_call.args else {},
-                            id=part.function_call.id,
-                            thought_signature=getattr(part, "thought_signature", None)
+                            tool_name=tool_name,
+                            args=(
+                                dict(gemini_part.function_call.args)
+                                if gemini_part.function_call.args
+                                else {}
+                            ),
+                            id=gemini_part.function_call.id,
+                            thought_signature=getattr(gemini_part, "thought_signature", None),
                         )
                     )
-                if isinstance(part.text, str):
-                    content += part.text
+                if gemini_part.text is not None:
+                    content += gemini_part.text
 
             if extracted_tool_calls:
                 tool_calls = extracted_tool_calls

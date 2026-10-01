@@ -6,10 +6,11 @@ from velix_agent.core.logging import get_logger
 from velix_agent.core.response import AgentResponse
 from velix_agent.core.session import Session
 from velix_agent.providers.base import Provider
-from velix_agent.tools.registry import ToolRegistry
 from velix_agent.tools.base import ToolResult
+from velix_agent.tools.registry import ToolRegistry
 
 logger = get_logger("agent")
+
 
 def _truncate_string(s: str, max_size: int, keep_end: bool = False) -> str:
     """Truncates a string if it exceeds max_size, leaving a marker."""
@@ -26,13 +27,16 @@ def _truncate_string(s: str, max_size: int, keep_end: bool = False) -> str:
     else:
         return s[:actual_max] + trunc_msg
 
+
 def _truncate_tool_result(res: ToolResult, max_size: int) -> ToolResult:
     """Safely limits the size of fields in a ToolResult."""
     import copy
 
     if res.status == "error" and res.error:
         truncated_error = _truncate_string(res.error, max_size, keep_end=True)
-        return ToolResult(status=res.status, data=res.data, error=truncated_error, metadata=res.metadata)
+        return ToolResult(
+            status=res.status, data=res.data, error=truncated_error, metadata=res.metadata
+        )
     elif res.data and isinstance(res.data, dict):
         # We must copy the dict to avoid modifying original frozen data references
         new_data = copy.deepcopy(res.data)
@@ -48,7 +52,9 @@ def _truncate_tool_result(res: ToolResult, max_size: int) -> ToolResult:
             new_data["stderr"] = _truncate_string(new_data["stderr"], max_size, keep_end=True)
             changed = True
         if changed:
-            return ToolResult(status=res.status, data=new_data, error=res.error, metadata=res.metadata)
+            return ToolResult(
+                status=res.status, data=new_data, error=res.error, metadata=res.metadata
+            )
     return res
 
 
@@ -99,7 +105,7 @@ class Agent:
             )
 
         try:
-            from velix_agent.core.message import Message, TextPart, ToolResultPart
+            from velix_agent.core.message import Message, MessagePart, TextPart, ToolResultPart
 
             # We will accumulate messages generated in this turn
             new_messages: list[Message] = [Message(role="user", content=parts)]
@@ -123,7 +129,7 @@ class Agent:
 
                 # We have tool calls
                 # Add the assistant's response with tool calls to new_messages
-                assistant_parts = []
+                assistant_parts: list[MessagePart] = []
                 if response.text:
                     assistant_parts.append(TextPart(text=response.text))
 
@@ -132,13 +138,15 @@ class Agent:
                     assistant_parts.append(tc)
                 new_messages.append(Message(role="assistant", content=assistant_parts))
 
-                tool_results = []
+                tool_results: list[MessagePart] = []
                 for tc in response.tool_calls:
                     tool = self.tool_registry.get_tool(tc.tool_name)
                     if tool is None:
                         tool_results.append(
                             ToolResultPart(
-                                tool_name=tc.tool_name, error=f"Unknown tool: {tc.tool_name}", tool_call_id=tc.id
+                                tool_name=tc.tool_name,
+                                error=f"Unknown tool: {tc.tool_name}",
+                                tool_call_id=tc.id,
                             )
                         )
                         continue
@@ -149,22 +157,30 @@ class Agent:
 
                         if res.status == "error":
                             tool_results.append(
-                                ToolResultPart(tool_name=tc.tool_name, error=res.error, tool_call_id=tc.id)
+                                ToolResultPart(
+                                    tool_name=tc.tool_name, error=res.error, tool_call_id=tc.id
+                                )
                             )
                         else:
                             tool_results.append(
-                                ToolResultPart(tool_name=tc.tool_name, data=res.data, tool_call_id=tc.id)
+                                ToolResultPart(
+                                    tool_name=tc.tool_name, data=res.data, tool_call_id=tc.id
+                                )
                             )
                     except TypeError as e:
                         tool_results.append(
                             ToolResultPart(
-                                tool_name=tc.tool_name, error=f"Invalid arguments: {e}", tool_call_id=tc.id
+                                tool_name=tc.tool_name,
+                                error=f"Invalid arguments: {e}",
+                                tool_call_id=tc.id,
                             )
                         )
                     except Exception as e:
                         tool_results.append(
                             ToolResultPart(
-                                tool_name=tc.tool_name, error=f"Execution error: {e}", tool_call_id=tc.id
+                                tool_name=tc.tool_name,
+                                error=f"Execution error: {e}",
+                                tool_call_id=tc.id,
                             )
                         )
 

@@ -8,6 +8,7 @@ from velix_agent.tools.registry import ToolRegistry
 from velix_agent.tools.run_command import RunCommandTool
 from velix_agent.tools.write_file import WriteFileTool
 
+
 def test_agent_file_ops_integration_flow(tmp_path):
     workspace = tmp_path / "test_workspace"
     workspace.mkdir()
@@ -39,19 +40,21 @@ def test_agent_file_ops_integration_flow(tmp_path):
     assert (workspace / "hello.txt").read_text() == "Hello World"
 
     # 2. Read File
-    cmd_read = 'execute tool read_file file_path=hello.txt'
+    cmd_read = "execute tool read_file file_path=hello.txt"
     resp_read = agent.respond(cmd_read)
     assert resp_read.status == "success"
 
     # 3. Edit File
-    cmd_edit = 'execute tool edit_file file_path=hello.txt,old_text=World,new_text=Agent'
+    cmd_edit = "execute tool edit_file file_path=hello.txt,old_text=World,new_text=Agent"
     resp_edit = agent.respond(cmd_edit)
     assert resp_edit.status == "success"
     assert (workspace / "hello.txt").read_text() == "Hello Agent"
 
     # 4. Run Command to verify
     # Because of mock.py's split(","), we do command="sh,-c,cat hello.txt"
-    cmd_run = 'execute tool run_command command="/usr/bin/python3,-c,print(open(\'hello.txt\').read())"'
+    cmd_run = (
+        "execute tool run_command command=\"/usr/bin/python3,-c,print(open('hello.txt').read())\""
+    )
     resp_run = agent.respond(cmd_run)
     assert resp_run.status == "success"
 

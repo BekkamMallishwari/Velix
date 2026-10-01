@@ -2,18 +2,17 @@
 
 from unittest.mock import MagicMock
 
-import pytest
 from pydantic import SecretStr
 
 from velix_agent.core.config import VelixConfig
-from velix_agent.core.message import Message, ToolCallPart, ToolResultPart, TextPart
+from velix_agent.core.message import Message, ToolCallPart, ToolResultPart
 from velix_agent.providers.factory import get_provider
 from velix_agent.tools.base import Tool, ToolResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class SimpleTool(Tool):
     """Minimal Tool stub used only to drive FunctionDeclaration building."""
@@ -85,10 +84,12 @@ def _mock_response(text="", function_calls=None):
 # Tests: FunctionDeclaration building (_build_function_declaration)
 # ---------------------------------------------------------------------------
 
+
 def test_build_function_declaration_simple():
     """_build_function_declaration produces correct name, description, params."""
-    from velix_agent.providers.gemini import _build_function_declaration
     from google.genai import types
+
+    from velix_agent.providers.gemini import _build_function_declaration
 
     tool = SimpleTool(
         "list_directory",
@@ -112,8 +113,8 @@ def test_build_function_declaration_simple():
 
 def test_build_function_declaration_array_param():
     """Array-type parameters are mapped correctly to Gemini Schema."""
+
     from velix_agent.providers.gemini import _build_function_declaration
-    from google.genai import types
 
     tool = SimpleTool(
         "run_command",
@@ -162,6 +163,7 @@ def test_build_function_declaration_multi_param():
 # Tests: tools are passed into the Gemini API call
 # ---------------------------------------------------------------------------
 
+
 def test_tools_passed_to_gemini_api(monkeypatch):
     """When tools are supplied, generate_content is called with config.tools set."""
     from google.genai import types
@@ -209,6 +211,7 @@ def test_no_tools_means_no_tool_config(monkeypatch):
 # Tests: function_call response → ToolCallPart in AgentResponse
 # ---------------------------------------------------------------------------
 
+
 def test_function_call_response_parsed_to_tool_calls(monkeypatch):
     """When Gemini returns function_calls, AgentResponse.tool_calls is populated."""
     provider, mock_client = _make_provider(monkeypatch)
@@ -216,15 +219,17 @@ def test_function_call_response_parsed_to_tool_calls(monkeypatch):
     fc = MagicMock()
     fc.name = "list_directory"
     fc.args = {"dir_path": "."}
-    mock_client.models.generate_content.return_value = _mock_response(
-        text="", function_calls=[fc]
-    )
+    mock_client.models.generate_content.return_value = _mock_response(text="", function_calls=[fc])
 
-    tool = SimpleTool("list_directory", "Lists.", {
-        "type": "object",
-        "properties": {"dir_path": {"type": "string", "description": "path"}},
-        "required": ["dir_path"],
-    })
+    tool = SimpleTool(
+        "list_directory",
+        "Lists.",
+        {
+            "type": "object",
+            "properties": {"dir_path": {"type": "string", "description": "path"}},
+            "required": ["dir_path"],
+        },
+    )
 
     msg = Message(role="user", content="list files")
     resp = provider.primary.generate([msg], tools=[tool])
@@ -273,6 +278,7 @@ def test_multiple_function_calls_parsed(monkeypatch):
 # ---------------------------------------------------------------------------
 # Tests: ToolCallPart / ToolResultPart in messages → correct Gemini parts
 # ---------------------------------------------------------------------------
+
 
 def test_tool_call_part_in_assistant_message_becomes_function_call_part(monkeypatch):
     """ToolCallPart in an assistant message is serialised as a function_call Part."""
@@ -372,6 +378,7 @@ def test_tool_result_error_serialised_correctly(monkeypatch):
 # ---------------------------------------------------------------------------
 # Tests: automatic_function_calling is always disabled
 # ---------------------------------------------------------------------------
+
 
 def test_automatic_function_calling_is_disabled(monkeypatch):
     """GenerateContentConfig always has automatic_function_calling disabled."""

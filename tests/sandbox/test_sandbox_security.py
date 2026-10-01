@@ -114,6 +114,7 @@ def test_sandbox_fail_closed():
         manager.execute(["ls"], workspace_root="/tmp")
     assert "unavailable" in str(excinfo.value)
 
+
 def test_sandbox_read_etc_passwd(manager, workspace):
     if platform.system() != "Darwin":
         pytest.skip("Sandbox only supported on macOS")
@@ -121,12 +122,14 @@ def test_sandbox_read_etc_passwd(manager, workspace):
     result = manager.execute(["cat", "/etc/passwd"], workspace_root=workspace)
     assert result.exit_code != 0
 
+
 def test_sandbox_read_etc_hosts(manager, workspace):
     if platform.system() != "Darwin":
         pytest.skip("Sandbox only supported on macOS")
 
     result = manager.execute(["cat", "/etc/hosts"], workspace_root=workspace)
     assert result.exit_code != 0
+
 
 def test_sandbox_read_aws_credentials(manager, workspace):
     if platform.system() != "Darwin":
@@ -145,6 +148,7 @@ def test_sandbox_read_aws_credentials(manager, workspace):
     # cleanup
     dummy_creds.unlink()
 
+
 def test_sandbox_read_git_dir(manager, workspace):
     if platform.system() != "Darwin":
         pytest.skip("Sandbox only supported on macOS")
@@ -155,6 +159,7 @@ def test_sandbox_read_git_dir(manager, workspace):
 
     result = manager.execute(["cat", git_file.as_posix()], workspace_root=workspace)
     assert result.exit_code != 0
+
 
 def test_sandbox_read_config_dir(manager, workspace):
     if platform.system() != "Darwin":
@@ -171,6 +176,7 @@ def test_sandbox_read_config_dir(manager, workspace):
         assert result.exit_code != 0
     finally:
         dummy_file.unlink()
+
 
 def test_sandbox_symlink_escape(manager, workspace, tmp_path):
     if platform.system() != "Darwin":
@@ -189,6 +195,7 @@ def test_sandbox_symlink_escape(manager, workspace, tmp_path):
         symlink_file.unlink()
         outside_file.unlink()
 
+
 def test_sandbox_command_timeout(manager, workspace):
     if platform.system() != "Darwin":
         pytest.skip("Sandbox only supported on macOS")
@@ -198,10 +205,13 @@ def test_sandbox_command_timeout(manager, workspace):
     assert result.exit_code == -1
     assert "timed out" in result.stderr.lower()
 
+
 def test_sandbox_network_denial_localhost(manager, workspace):
     if platform.system() != "Darwin":
         pytest.skip("Sandbox only supported on macOS")
 
     # Try to ping localhost (should be blocked by network sandbox)
-    result = manager.execute(["ping", "-c", "1", "-t", "1", "127.0.0.1"], workspace_root=workspace, timeout=3)
+    result = manager.execute(
+        ["ping", "-c", "1", "-t", "1", "127.0.0.1"], workspace_root=workspace, timeout=3
+    )
     assert result.exit_code != 0

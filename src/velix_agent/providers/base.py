@@ -14,8 +14,6 @@ class Provider(abc.ABC):
     """Abstract base class for all Model Providers."""
 
     @abc.abstractmethod
-    def generate(
-        self, messages: list[Message], tools: list["Tool"] | None = None
-    ) -> AgentResponse:
+    def generate(self, messages: list[Message], tools: list["Tool"] | None = None) -> AgentResponse:
         """Generate a response based on the conversation history."""
         pass

@@ -26,14 +26,16 @@ class RunCommandTool(Tool):
         return "Executes a shell command safely within the configured sandbox."
 
     @property
-    def parameters(self) -> dict:
+    def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
                 "command": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "The command and its arguments as a list of strings, e.g. ['ls', '-la'].",
+                    "description": (
+                        "The command and its arguments as a list of strings, e.g. ['ls', '-la']."
+                    ),
                 },
             },
             "required": ["command"],
@@ -42,9 +44,7 @@ class RunCommandTool(Tool):
     def execute(self, **kwargs: Any) -> ToolResult:
         command = kwargs.get("command")
         if not command:
-            return ToolResult(
-                status="error", error="Missing required argument: 'command'"
-            )
+            return ToolResult(status="error", error="Missing required argument: 'command'")
         if not isinstance(command, list):
             return ToolResult(
                 status="error",
@@ -66,11 +66,6 @@ class RunCommandTool(Tool):
                 },
             )
         except SandboxError as e:
-            return ToolResult(
-                status="error",
-                error=f"Sandbox rejected execution: {e!s}"
-            )
+            return ToolResult(status="error", error=f"Sandbox rejected execution: {e!s}")
         except Exception as e:
-            return ToolResult(
-                status="error", error=f"Unexpected error executing command: {e!s}"
-            )
+            return ToolResult(status="error", error=f"Unexpected error executing command: {e!s}")

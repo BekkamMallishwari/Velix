@@ -60,6 +60,7 @@ def test_agent_default_tool_registry() -> None:
 
     assert agent.tool_registry is not None
     from velix_agent.tools.registry import ToolRegistry
+
     assert isinstance(agent.tool_registry, ToolRegistry)
 
 

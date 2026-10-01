@@ -23,7 +23,7 @@ class ReadFileTool(Tool):
         return "Reads the contents of a file within the allowed workspace."
 
     @property
-    def parameters(self) -> dict:
+    def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
@@ -38,18 +38,15 @@ class ReadFileTool(Tool):
     def execute(self, **kwargs: Any) -> ToolResult:
         file_path_str = kwargs.get("file_path")
         if not file_path_str:
-            return ToolResult(
-                status="error", error="Missing required argument: 'file_path'"
-            )
+            return ToolResult(status="error", error="Missing required argument: 'file_path'")
 
         try:
             from velix_agent.utils.paths import resolve_safe_path
+
             target_path = resolve_safe_path(self.workspace_root, file_path_str)
 
             if not target_path.exists():
-                return ToolResult(
-                    status="error", error=f"File not found: {file_path_str}"
-                )
+                return ToolResult(status="error", error=f"File not found: {file_path_str}")
 
             if target_path.is_dir():
                 return ToolResult(
@@ -72,6 +69,4 @@ class ReadFileTool(Tool):
                 status="error", error=f"File is not valid UTF-8 text: {file_path_str}"
             )
         except Exception as e:
-            return ToolResult(
-                status="error", error=f"Unexpected error reading file: {e!s}"
-            )
+            return ToolResult(status="error", error=f"Unexpected error reading file: {e!s}")

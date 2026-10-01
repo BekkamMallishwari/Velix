@@ -1,4 +1,3 @@
-
 from velix_agent.core.agent import Agent
 from velix_agent.core.session import Session
 from velix_agent.providers.mock import MockProvider

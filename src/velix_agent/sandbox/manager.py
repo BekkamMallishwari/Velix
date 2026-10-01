@@ -22,7 +22,9 @@ class SandboxManager:
         else:
             self.backend = backend
 
-    def execute(self, command: list[str], workspace_root: str | Path, timeout: int = 30) -> SandboxResult:
+    def execute(
+        self, command: list[str], workspace_root: str | Path, timeout: int = 30
+    ) -> SandboxResult:
         if self.backend is None:
             raise SandboxError(f"Sandbox backend unavailable for platform: {platform.system()}")
 

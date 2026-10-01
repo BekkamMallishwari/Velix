@@ -46,9 +46,7 @@ class LocalProvider(Provider):
         except (urllib.error.URLError, TimeoutError, OSError):
             return False, "Ollama not running"
 
-    def generate(
-        self, messages: list[Message], tools: list["Tool"] | None = None
-    ) -> AgentResponse:
+    def generate(self, messages: list[Message], tools: list["Tool"] | None = None) -> AgentResponse:
         is_available, reason = self.check_availability()
         if not is_available:
             if "Ollama not running" in reason:

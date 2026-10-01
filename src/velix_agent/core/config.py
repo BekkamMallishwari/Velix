@@ -43,7 +43,10 @@ class VelixConfig(BaseSettings):
     )
     max_tool_output_size: int = Field(
         default=8000,
-        description="Maximum length of tool output strings (stdout, stderr, file content) to send to the provider.",
+        description=(
+            "Maximum length of tool output strings "
+            "(stdout, stderr, file content) to send to the provider."
+        ),
     )
 
     # --- History -----------------------------------------------------------

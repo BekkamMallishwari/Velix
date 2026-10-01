@@ -35,7 +35,7 @@ class MacOSSandboxBackend(SandboxBackend):
         profile.append('    (subpath "/System")')
         profile.append('    (subpath "/Library")')
         profile.append('    (subpath "/private/var/select")')
-        profile.append(')')
+        profile.append(")")
 
         workspace_path = policy.workspace_root.resolve().as_posix()
         profile.append(f'(allow file-read* file-write* (subpath "{workspace_path}"))')
@@ -46,7 +46,9 @@ class MacOSSandboxBackend(SandboxBackend):
 
         return "\n".join(profile)
 
-    def execute(self, command: list[str], policy: SandboxPolicy, timeout: int = 30) -> SandboxResult:
+    def execute(
+        self, command: list[str], policy: SandboxPolicy, timeout: int = 30
+    ) -> SandboxResult:
         import platform
 
         if platform.system() != "Darwin":

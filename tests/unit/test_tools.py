@@ -1,6 +1,5 @@
 """Unit tests for the Tool Layer."""
 
-
 import pytest
 
 from velix_agent.sandbox.manager import SandboxManager
@@ -123,6 +122,7 @@ def test_read_file_tool_empty(workspace):
     assert result.status == "success"
     assert result.data["content"] == ""
 
+
 def test_read_file_tool_unicode(workspace):
     test_file = workspace / "unicode.txt"
     test_file.write_text("hello 🌍", encoding="utf-8")
@@ -179,6 +179,7 @@ def test_list_directory_tool_traversal(workspace, tmp_path):
     assert result.status == "error"
     assert "outside the allowed workspace" in result.error
 
+
 def test_list_directory_tool_nested(workspace):
     nested = workspace / "a" / "b"
     nested.mkdir(parents=True)
@@ -188,6 +189,7 @@ def test_list_directory_tool_nested(workspace):
     assert result.status == "success"
     assert len(result.data["items"]) == 1
     assert result.data["items"][0]["name"] == "file.txt"
+
 
 def test_list_directory_tool_git_protection(workspace):
     git_dir = workspace / ".git"
@@ -246,17 +248,18 @@ def test_tool_registry():
     with pytest.raises(ValueError, match="already registered"):
         registry.register(tool)
 
+
 def test_tool_registry_unknown():
     registry = ToolRegistry()
     assert registry.get_tool("missing_tool") is None
 
+
 def test_tool_registry_builtins():
     registry = ToolRegistry()
-    from velix_agent.tools.read_file import ReadFileTool
-    from velix_agent.tools.write_file import WriteFileTool
     from velix_agent.tools.edit_file import EditFileTool
     from velix_agent.tools.list_directory import ListDirectoryTool
-    from velix_agent.tools.run_command import RunCommandTool
+    from velix_agent.tools.read_file import ReadFileTool
+    from velix_agent.tools.write_file import WriteFileTool
 
     registry.register(ReadFileTool(workspace_root="/tmp"))
     registry.register(WriteFileTool(workspace_root="/tmp"))

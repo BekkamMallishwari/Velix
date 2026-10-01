@@ -20,16 +20,21 @@ class WriteFileTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Creates a new file or overwrites an existing file with the provided content within the allowed workspace."
+        return (
+            "Creates a new file or overwrites an existing file "
+            "with the provided content within the allowed workspace."
+        )
 
     @property
-    def parameters(self) -> dict:
+    def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Relative or absolute path to the file to write within the workspace.",
+                    "description": (
+                        "Relative or absolute path to the file to write within the workspace."
+                    ),
                 },
                 "content": {
                     "type": "string",
@@ -44,20 +49,15 @@ class WriteFileTool(Tool):
         content = kwargs.get("content")
 
         if not file_path_str:
-            return ToolResult(
-                status="error", error="Missing required argument: 'file_path'"
-            )
+            return ToolResult(status="error", error="Missing required argument: 'file_path'")
         if content is None:
-            return ToolResult(
-                status="error", error="Missing required argument: 'content'"
-            )
+            return ToolResult(status="error", error="Missing required argument: 'content'")
         if not isinstance(content, str):
-            return ToolResult(
-                status="error", error="Argument 'content' must be a string."
-            )
+            return ToolResult(status="error", error="Argument 'content' must be a string.")
 
         try:
             from velix_agent.utils.paths import resolve_safe_path
+
             target_path = resolve_safe_path(self.workspace_root, file_path_str, is_write=True)
 
             if target_path.exists() and target_path.is_dir():
@@ -72,7 +72,7 @@ class WriteFileTool(Tool):
             target_path.write_text(content, encoding="utf-8")
             return ToolResult(
                 status="success",
-                data={"message": f"Successfully wrote to {file_path_str}", "size": len(content)}
+                data={"message": f"Successfully wrote to {file_path_str}", "size": len(content)},
             )
 
         except PermissionError as e:
@@ -83,6 +83,4 @@ class WriteFileTool(Tool):
                 status="error", error=f"Permission denied writing file: {file_path_str}"
             )
         except Exception as e:
-            return ToolResult(
-                status="error", error=f"Unexpected error writing file: {e!s}"
-            )
+            return ToolResult(status="error", error=f"Unexpected error writing file: {e!s}")

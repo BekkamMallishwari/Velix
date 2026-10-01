@@ -23,13 +23,16 @@ class ListDirectoryTool(Tool):
         return "Lists files and directories within a specified path in the workspace."
 
     @property
-    def parameters(self) -> dict:
+    def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
                 "dir_path": {
                     "type": "string",
-                    "description": "Relative or absolute path to the directory to list within the workspace. Use '.' for the workspace root.",
+                    "description": (
+                        "Relative or absolute path to the directory to list "
+                        "within the workspace. Use '.' for the workspace root."
+                    ),
                 },
             },
             "required": ["dir_path"],
@@ -38,18 +41,15 @@ class ListDirectoryTool(Tool):
     def execute(self, **kwargs: Any) -> ToolResult:
         dir_path_str = kwargs.get("dir_path")
         if not dir_path_str:
-            return ToolResult(
-                status="error", error="Missing required argument: 'dir_path'"
-            )
+            return ToolResult(status="error", error="Missing required argument: 'dir_path'")
 
         try:
             from velix_agent.utils.paths import resolve_safe_path
+
             target_path = resolve_safe_path(self.workspace_root, dir_path_str)
 
             if not target_path.exists():
-                return ToolResult(
-                    status="error", error=f"Directory not found: {dir_path_str}"
-                )
+                return ToolResult(status="error", error=f"Directory not found: {dir_path_str}")
 
             if not target_path.is_dir():
                 return ToolResult(
@@ -78,6 +78,4 @@ class ListDirectoryTool(Tool):
                 status="error", error=f"Permission denied listing directory: {dir_path_str}"
             )
         except Exception as e:
-            return ToolResult(
-                status="error", error=f"Unexpected error listing directory: {e!s}"
-            )
+            return ToolResult(status="error", error=f"Unexpected error listing directory: {e!s}")

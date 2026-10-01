@@ -32,9 +32,7 @@ class ProviderManager(Provider):
         self.fallbacks = fallbacks
         self.cooldowns: dict[str, float] = {}
 
-    def generate(
-        self, messages: list[Message], tools: list["Tool"] | None = None
-    ) -> AgentResponse:
+    def generate(self, messages: list[Message], tools: list["Tool"] | None = None) -> AgentResponse:
         import time
 
         errors: list[Exception] = []
@@ -77,21 +75,27 @@ class ProviderManager(Provider):
             except ProviderAuthError as e:
                 self.cooldowns[name] = current_time + 300.0
                 msg = f"authentication/configuration error: {e}"
-                logger.debug("Provider %s raised %s: %s", name, type(e).__name__, str(e), exc_info=True)
+                logger.debug(
+                    "Provider %s raised %s: %s", name, type(e).__name__, str(e), exc_info=True
+                )
                 errors.append(e)
                 error_msgs.append(f"- {name.capitalize()}: {msg}")
                 fallback_warnings.append(f"{name.capitalize()} unavailable ({msg})")
                 continue
             except ProviderUnsupportedError as e:
                 msg = f"unsupported file type: {e}"
-                logger.debug("Provider %s raised %s: %s", name, type(e).__name__, str(e), exc_info=True)
+                logger.debug(
+                    "Provider %s raised %s: %s", name, type(e).__name__, str(e), exc_info=True
+                )
                 errors.append(e)
                 error_msgs.append(f"- {name.capitalize()}: {msg}")
                 fallback_warnings.append(f"{name.capitalize()} unavailable ({msg})")
                 continue
             except ProviderNotFoundError as e:
                 msg = f"model not found: {e}"
-                logger.debug("Provider %s raised %s: %s", name, type(e).__name__, str(e), exc_info=True)
+                logger.debug(
+                    "Provider %s raised %s: %s", name, type(e).__name__, str(e), exc_info=True
+                )
                 errors.append(e)
                 error_msgs.append(f"- {name.capitalize()}: {msg}")
                 fallback_warnings.append(f"{name.capitalize()} unavailable ({msg})")
@@ -99,7 +103,9 @@ class ProviderManager(Provider):
             except ProviderQuotaError as e:
                 self.cooldowns[name] = current_time + 300.0
                 msg = "quota exhausted"
-                logger.debug("Provider %s raised %s: %s", name, type(e).__name__, str(e), exc_info=True)
+                logger.debug(
+                    "Provider %s raised %s: %s", name, type(e).__name__, str(e), exc_info=True
+                )
                 errors.append(e)
                 error_msgs.append(f"- {name.capitalize()}: {msg}")
                 fallback_warnings.append(f"{name.capitalize()} unavailable ({msg})")
@@ -107,14 +113,22 @@ class ProviderManager(Provider):
             except ProviderTransientError as e:
                 self.cooldowns[name] = current_time + 60.0
                 msg = f"timeout or temporary error: {e}"
-                logger.debug("Provider %s raised %s: %s", name, type(e).__name__, str(e), exc_info=True)
+                logger.debug(
+                    "Provider %s raised %s: %s", name, type(e).__name__, str(e), exc_info=True
+                )
                 errors.append(e)
                 error_msgs.append(f"- {name.capitalize()}: {msg}")
                 fallback_warnings.append(f"{name.capitalize()} unavailable ({msg})")
                 continue
             except Exception as e:
                 msg = f"unavailable: {type(e).__name__}({e})"
-                logger.debug("Provider %s raised unexpected %s: %s", name, type(e).__name__, str(e), exc_info=True)
+                logger.debug(
+                    "Provider %s raised unexpected %s: %s",
+                    name,
+                    type(e).__name__,
+                    str(e),
+                    exc_info=True,
+                )
                 errors.append(e)
                 error_msgs.append(f"- {name.capitalize()}: {msg}")
                 fallback_warnings.append(f"{name.capitalize()} unavailable ({msg})")

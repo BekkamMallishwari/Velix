@@ -23,17 +23,21 @@ class EditFileTool(Tool):
         return "Edits an existing file by replacing an exact string occurrence with new text."
 
     @property
-    def parameters(self) -> dict:
+    def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Relative or absolute path to the file to edit within the workspace.",
+                    "description": (
+                        "Relative or absolute path to the file to edit within the workspace."
+                    ),
                 },
                 "old_text": {
                     "type": "string",
-                    "description": "The exact text to find and replace. Must appear exactly once in the file.",
+                    "description": (
+                        "The exact text to find and replace. Must appear exactly once in the file."
+                    ),
                 },
                 "new_text": {
                     "type": "string",
@@ -49,30 +53,21 @@ class EditFileTool(Tool):
         new_text = kwargs.get("new_text")
 
         if not file_path_str:
-            return ToolResult(
-                status="error", error="Missing required argument: 'file_path'"
-            )
+            return ToolResult(status="error", error="Missing required argument: 'file_path'")
         if old_text is None:
-            return ToolResult(
-                status="error", error="Missing required argument: 'old_text'"
-            )
+            return ToolResult(status="error", error="Missing required argument: 'old_text'")
         if new_text is None:
-            return ToolResult(
-                status="error", error="Missing required argument: 'new_text'"
-            )
+            return ToolResult(status="error", error="Missing required argument: 'new_text'")
         if not isinstance(old_text, str) or not isinstance(new_text, str):
-            return ToolResult(
-                status="error", error="'old_text' and 'new_text' must be strings."
-            )
+            return ToolResult(status="error", error="'old_text' and 'new_text' must be strings.")
 
         try:
             from velix_agent.utils.paths import resolve_safe_path
+
             target_path = resolve_safe_path(self.workspace_root, file_path_str, is_write=True)
 
             if not target_path.exists():
-                return ToolResult(
-                    status="error", error=f"File not found: {file_path_str}"
-                )
+                return ToolResult(status="error", error=f"File not found: {file_path_str}")
 
             if target_path.is_dir():
                 return ToolResult(
@@ -96,8 +91,7 @@ class EditFileTool(Tool):
             target_path.write_text(new_content, encoding="utf-8")
 
             return ToolResult(
-                status="success",
-                data={"message": f"Successfully edited {file_path_str}"}
+                status="success", data={"message": f"Successfully edited {file_path_str}"}
             )
 
         except PermissionError as e:
@@ -112,6 +106,4 @@ class EditFileTool(Tool):
                 status="error", error=f"File is not valid UTF-8 text: {file_path_str}"
             )
         except Exception as e:
-            return ToolResult(
-                status="error", error=f"Unexpected error editing file: {e!s}"
-            )
+            return ToolResult(status="error", error=f"Unexpected error editing file: {e!s}")

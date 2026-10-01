@@ -35,9 +35,7 @@ class OpenAIProvider(Provider):
         self.model = model
         self.fallback_model = fallback_model
 
-    def generate(
-        self, messages: list[Message], tools: list["Tool"] | None = None
-    ) -> AgentResponse:
+    def generate(self, messages: list[Message], tools: list["Tool"] | None = None) -> AgentResponse:
         openai_messages: list[dict[str, Any]] = []
 
         for msg in messages:
