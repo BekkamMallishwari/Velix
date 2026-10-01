@@ -54,6 +54,7 @@ class ToolCallPart(MessagePart):
     args: dict[str, Any] = field(default_factory=dict)
     id: str | None = None
     thought_signature: str | bytes | None = None
+    provider_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

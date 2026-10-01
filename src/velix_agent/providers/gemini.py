@@ -126,11 +126,21 @@ class GeminiProvider(Provider):
                             parts.append(types.Part.from_text(text=f"[System Note: {part.error}]"))
                         elif isinstance(part, ToolCallPart):
                             # Assistant requested a tool call — replay as function_call part.
-                            fc = types.FunctionCall(name=part.tool_name, args=part.args, id=part.id)
-                            part_kwargs: dict[str, Any] = {"function_call": fc}
-                            if getattr(part, "thought_signature", None) is not None:
-                                part_kwargs["thought_signature"] = part.thought_signature
-                            parts.append(types.Part(**part_kwargs))
+                            if (
+                                part.provider_metadata
+                                and "gemini_raw_part" in part.provider_metadata
+                            ):
+                                parts.append(
+                                    types.Part(**part.provider_metadata["gemini_raw_part"])
+                                )
+                            else:
+                                fc = types.FunctionCall(
+                                    name=part.tool_name, args=part.args, id=part.id
+                                )
+                                part_kwargs: dict[str, Any] = {"function_call": fc}
+                                if getattr(part, "thought_signature", None) is not None:
+                                    part_kwargs["thought_signature"] = part.thought_signature
+                                parts.append(types.Part(**part_kwargs))
                         elif isinstance(part, ToolResultPart):
                             # Tool result — replay as function_response part.
                             response_value = _tool_result_to_response_value(part.data, part.error)
@@ -238,6 +248,7 @@ class GeminiProvider(Provider):
             for gemini_part in response.candidates[0].content.parts:
                 if gemini_part.function_call:
                     tool_name = gemini_part.function_call.name or "unknown_tool"
+                    raw_dump = gemini_part.model_dump(mode="json", exclude_none=True)
                     extracted_tool_calls.append(
                         ToolCallPart(
                             tool_name=tool_name,
@@ -248,6 +259,7 @@ class GeminiProvider(Provider):
                             ),
                             id=gemini_part.function_call.id,
                             thought_signature=getattr(gemini_part, "thought_signature", None),
+                            provider_metadata={"gemini_raw_part": raw_dump},
                         )
                     )
                 if gemini_part.text is not None:

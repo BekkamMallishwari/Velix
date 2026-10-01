@@ -396,3 +396,103 @@ def test_automatic_function_calling_is_disabled(monkeypatch):
     afc = config.automatic_function_calling
     assert afc is not None
     assert afc.disable is True
+
+
+def test_tool_call_part_preserves_original_gemini_part(monkeypatch):
+    """If ToolCallPart has provider_metadata, it is passed directly to the API."""
+    from google.genai import types
+
+    provider, mock_client = _make_provider(monkeypatch)
+    mock_client.models.generate_content.return_value = _mock_response(text="done")
+
+    fc = types.FunctionCall(name="test", args={"a": 1})
+    mock_gemini_part = types.Part(function_call=fc, thought_signature=b"123")
+
+    tc = ToolCallPart(
+        tool_name="test",
+        args={"a": 1},
+        provider_metadata={
+            "gemini_raw_part": mock_gemini_part.model_dump(mode="json", exclude_none=True)
+        },
+    )
+
+    messages = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", content=[tc]),
+    ]
+
+    provider.primary.generate(messages, tools=[])
+
+    call_args = mock_client.models.generate_content.call_args
+    contents = call_args[1]["contents"]
+
+    assistant_content = contents[1]
+    # Check that it recreated the part exactly
+    assert assistant_content.parts[0].function_call.name == "test"
+    assert assistant_content.parts[0].thought_signature == b"123"
+
+
+def test_multiple_tool_calls_in_one_response(monkeypatch):
+    """Verify multiple tool calls are preserved correctly in order."""
+    from google.genai import types
+
+    provider, mock_client = _make_provider(monkeypatch)
+
+    # Setup mock response with two tool calls
+    fc1 = types.FunctionCall(name="tool1", args={"a": 1}, id="call_1")
+    p1 = types.Part(function_call=fc1)
+    fc2 = types.FunctionCall(name="tool2", args={"b": 2}, id="call_2")
+    p2 = types.Part(function_call=fc2)
+
+    mock_response = MagicMock(spec=types.GenerateContentResponse)
+    mock_response.text = ""
+    candidate = MagicMock()
+    candidate.content = MagicMock()
+    candidate.content.parts = [p1, p2]
+    mock_response.candidates = [candidate]
+    mock_response.usage_metadata = MagicMock()
+
+    mock_client.models.generate_content.return_value = mock_response
+
+    res = provider.generate([Message(role="user", content="hi")], tools=[])
+
+    # Verify extraction order
+    assert len(res.tool_calls) == 2
+    assert res.tool_calls[0].tool_name == "tool1"
+    assert res.tool_calls[0].id == "call_1"
+    assert res.tool_calls[1].tool_name == "tool2"
+    assert res.tool_calls[1].id == "call_2"
+
+    # Now simulate passing it back to provider
+    mock_client.models.generate_content.return_value = _mock_response(text="done")
+
+    messages = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", content=res.tool_calls),
+        Message(
+            role="user",
+            content=[
+                ToolResultPart(tool_name="tool1", data="res1", tool_call_id="call_1"),
+                ToolResultPart(tool_name="tool2", data="res2", tool_call_id="call_2"),
+            ],
+        ),
+    ]
+
+    provider.primary.generate(messages, tools=[])
+
+    call_args = mock_client.models.generate_content.call_args
+    contents = call_args[1]["contents"]
+
+    assert len(contents) == 3
+    # First is user "hi"
+    # Second is assistant with 2 parts
+    assert len(contents[1].parts) == 2
+    assert contents[1].parts[0].function_call.name == "tool1"
+    assert contents[1].parts[1].function_call.name == "tool2"
+
+    # Third is user with 2 function_responses
+    assert len(contents[2].parts) == 2
+    assert contents[2].parts[0].function_response.name == "tool1"
+    assert contents[2].parts[0].function_response.id == "call_1"
+    assert contents[2].parts[1].function_response.name == "tool2"
+    assert contents[2].parts[1].function_response.id == "call_2"

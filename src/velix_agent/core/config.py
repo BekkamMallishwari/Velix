@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydantic import Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from velix_agent.utils.paths import get_default_history_file
 
@@ -30,6 +30,18 @@ class VelixConfig(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # Prioritize .env file over OS environment variables
+        return (init_settings, dotenv_settings, env_settings, file_secret_settings)
 
     # --- General -----------------------------------------------------------
     debug: bool = Field(default=False, description="Enable debug mode")
@@ -70,11 +82,16 @@ class VelixConfig(BaseSettings):
         default=None, description="Optional fallback model if the primary OpenAI model fails"
     )
 
+    openrouter_api_key: SecretStr | None = Field(default=None, description="OpenRouter API Key")
+    openrouter_fallback_model: str | None = Field(
+        default=None, description="Optional fallback model if the primary OpenRouter model fails"
+    )
+
     anthropic_api_key: SecretStr | None = Field(default=None, description="Anthropic API Key")
     gemini_api_key: SecretStr | None = Field(default=None, description="Google Gemini API Key")
 
     provider_chain: list[str] = Field(
-        default_factory=lambda: ["gemini", "openai", "local"],
+        default_factory=lambda: ["gemini", "openai", "openrouter", "local"],
         description="Ordered list of provider names to form the fallback chain",
     )
 

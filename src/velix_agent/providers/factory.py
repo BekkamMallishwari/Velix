@@ -68,6 +68,18 @@ def _create_provider_instance(
             fallback_model=config.openai_fallback_model,
         )
 
+    elif name == "openrouter":
+        api_key = _get_secret(config.openrouter_api_key)
+        if not api_key:
+            return None
+        from velix_agent.providers.openrouter import OpenRouterProvider
+
+        return OpenRouterProvider(
+            api_key=api_key,
+            model=get_model("anthropic/claude-3.5-sonnet"),
+            fallback_model=config.openrouter_fallback_model,
+        )
+
     elif name == "local":
         from velix_agent.providers.local import LocalProvider
 
@@ -83,7 +95,7 @@ def get_provider(config: VelixConfig) -> Provider:
 
     primary_name = config.default_provider.strip().lower()
 
-    if primary_name not in ("mock", "gemini", "anthropic", "openai", "local"):
+    if primary_name not in ("mock", "gemini", "anthropic", "openai", "openrouter", "local"):
         raise ProviderConfigError(f"Unknown provider configured: {primary_name}")
 
     primary = _create_provider_instance(primary_name, config, is_primary=True)
@@ -93,6 +105,8 @@ def get_provider(config: VelixConfig) -> Provider:
     fallback_names = config.provider_chain
     if not fallback_names:
         fallback_names = []
+        if primary_name != "openrouter" and config.openrouter_api_key:
+            fallback_names.append("openrouter")
         if primary_name != "openai" and config.openai_api_key:
             fallback_names.append("openai")
         if primary_name != "anthropic" and config.anthropic_api_key:
