@@ -60,6 +60,8 @@ class EditFileTool(Tool):
             return ToolResult(status="error", error="Missing required argument: 'new_text'")
         if not isinstance(old_text, str) or not isinstance(new_text, str):
             return ToolResult(status="error", error="'old_text' and 'new_text' must be strings.")
+        if not isinstance(file_path_str, str):
+            return ToolResult(status="error", error="Argument 'file_path' must be a string.")
 
         try:
             from velix_agent.utils.paths import resolve_safe_path

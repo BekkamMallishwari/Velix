@@ -54,6 +54,8 @@ class WriteFileTool(Tool):
             return ToolResult(status="error", error="Missing required argument: 'content'")
         if not isinstance(content, str):
             return ToolResult(status="error", error="Argument 'content' must be a string.")
+        if not isinstance(file_path_str, str):
+            return ToolResult(status="error", error="Argument 'file_path' must be a string.")
 
         try:
             from velix_agent.utils.paths import resolve_safe_path

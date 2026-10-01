@@ -5,6 +5,8 @@ from typing import Any
 
 from velix_agent.tools.base import Tool, ToolResult
 
+MAX_READ_FILE_SIZE = 10 * 1024 * 1024  # 10 MB limit to prevent memory exhaustion before truncation
+
 
 class ReadFileTool(Tool):
     """Tool for reading files within the allowed workspace."""
@@ -39,6 +41,8 @@ class ReadFileTool(Tool):
         file_path_str = kwargs.get("file_path")
         if not file_path_str:
             return ToolResult(status="error", error="Missing required argument: 'file_path'")
+        if not isinstance(file_path_str, str):
+            return ToolResult(status="error", error="Argument 'file_path' must be a string.")
 
         try:
             from velix_agent.utils.paths import resolve_safe_path
@@ -51,6 +55,15 @@ class ReadFileTool(Tool):
             if target_path.is_dir():
                 return ToolResult(
                     status="error", error=f"Path is a directory, not a file: {file_path_str}"
+                )
+
+            if target_path.stat().st_size > MAX_READ_FILE_SIZE:
+                return ToolResult(
+                    status="error",
+                    error=(
+                        f"File exceeds maximum allowed read size of "
+                        f"{MAX_READ_FILE_SIZE} bytes: {file_path_str}"
+                    ),
                 )
 
             # Read file contents
