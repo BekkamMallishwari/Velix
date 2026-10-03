@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f8fc">
+  <meta name="description" content="A lightweight dashboard for creating and tracking internal IT support requests.">
+  <title>IT Support Tickets</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <a class="brand" href="#main-content" aria-label="IT Support Tickets home">
+        <span class="brand-mark" aria-hidden="true">IT</span>
+        <span class="brand-name">Support desk</span>
+      </a>
+      <span class="local-badge"><span class="local-dot" aria-hidden="true"></span>Local workspace</span>
+    </div>
+  </header>
+
+  <main id="main-content" class="page-shell">
+    <section class="page-intro" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">INTERNAL IT OPERATIONS</p>
+        <h1 id="page-title">IT support tickets</h1>
+        <p class="intro-copy">A clear view of the requests that need your team's attention.</p>
+      </div>
+      <a class="jump-link" href="#create-ticket">Create a ticket <span aria-hidden="true">↓</span></a>
+    </section>
+
+    <section class="summary-grid" aria-label="Ticket totals">
+      <article class="summary-card summary-open">
+        <div class="summary-topline"><span class="summary-label">Open</span><span class="summary-indicator" aria-hidden="true"></span></div>
+        <p class="summary-count" id="open-count">0</p>
+        <p class="summary-caption">Awaiting triage</p>
+      </article>
+      <article class="summary-card summary-progress">
+        <div class="summary-topline"><span class="summary-label">In Progress</span><span class="summary-indicator" aria-hidden="true"></span></div>
+        <p class="summary-count" id="progress-count">0</p>
+        <p class="summary-caption">Being worked on</p>
+      </article>
+      <article class="summary-card summary-resolved">
+        <div class="summary-topline"><span class="summary-label">Resolved</span><span class="summary-indicator" aria-hidden="true"></span></div>
+        <p class="summary-count" id="resolved-count">0</p>
+        <p class="summary-caption">Completed requests</p>
+      </article>
+    </section>
+
+    <div class="workspace-grid">
+      <section class="form-panel" id="create-ticket" aria-labelledby="form-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">NEW REQUEST</p>
+            <h2 id="form-title">Create a ticket</h2>
+          </div>
+          <span class="heading-step" aria-hidden="true">01</span>
+        </div>
+
+        <form id="ticket-form" novalidate>
+          <div class="form-field">
+            <label for="ticket-title">Ticket title <span class="required-mark">*</span></label>
+            <input id="ticket-title" name="title" type="text" maxlength="120" autocomplete="off" required>
+          </div>
+          <div class="form-field">
+            <label for="ticket-requester">Requester <span class="required-mark">*</span></label>
+            <input id="ticket-requester" name="requester" type="text" maxlength="100" autocomplete="name" required>
+          </div>
+          <div class="form-row">
+            <div class="form-field">
+              <label for="ticket-category">Category <span class="required-mark">*</span></label>
+              <select id="ticket-category" name="category" required>
+                <option value="">Select category</option>
+                <option value="Hardware">Hardware</option>
+                <option value="Software">Software</option>
+                <option value="Network">Network</option>
+                <option value="Access">Access</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label for="ticket-priority">Priority <span class="required-mark">*</span></label>
+              <select id="ticket-priority" name="priority" required>
+                <option value="">Select priority</option>
+                <option value="Low">Low</option>
+                <option value="Medium">Medium</option>
+                <option value="High">High</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-field">
+            <label for="ticket-description">Description <span class="required-mark">*</span></label>
+            <textarea id="ticket-description" name="description" rows="4" maxlength="1000" required></textarea>
+          </div>
+          <button class="primary-button" type="submit"><span aria-hidden="true">+</span> Add ticket</button>
+        </form>
+      </section>
+
+      <section class="tickets-panel" aria-labelledby="tickets-title">
+        <div class="section-heading tickets-heading">
+          <div>
+            <p class="eyebrow">WORK QUEUE</p>
+            <h2 id="tickets-title">All tickets <span class="heading-total" id="ticket-total">0</span></h2>
+          </div>
+        </div>
+
+        <div class="filter-bar" role="search" aria-label="Search and filter tickets">
+          <div class="search-field">
+            <label class="visually-hidden" for="ticket-search">Search by ticket title or requester</label>
+            <span class="search-icon" aria-hidden="true"></span>
+            <input id="ticket-search" type="search" placeholder="Search title or requester" autocomplete="off">
+          </div>
+          <div class="filter-controls">
+            <div class="filter-field">
+              <label for="status-filter">Status</label>
+              <select id="status-filter">
+                <option value="All">All statuses</option>
+                <option value="Open">Open</option>
+                <option value="In Progress">In Progress</option>
+                <option value="Resolved">Resolved</option>
+              </select>
+            </div>
+            <div class="filter-field">
+              <label for="category-filter">Category</label>
+              <select id="category-filter">
+                <option value="All">All categories</option>
+                <option value="Hardware">Hardware</option>
+                <option value="Software">Software</option>
+                <option value="Network">Network</option>
+                <option value="Access">Access</option>
+              </select>
+            </div>
+            <button class="clear-button" id="clear-filters" type="button">Clear filters</button>
+          </div>
+        </div>
+
+        <p class="feedback-message" id="feedback-message" role="status" aria-live="polite" hidden></p>
+        <div class="ticket-list" id="ticket-list" aria-live="polite" aria-relevant="additions removals text"></div>
+        <div class="empty-state" id="empty-state" hidden>
+          <span class="empty-symbol" aria-hidden="true">+</span>
+          <h3 id="empty-title">No tickets yet</h3>
+          <p id="empty-description">New requests will appear here once they are submitted.</p>
+        </div>
+        <div class="all-resolved" id="all-resolved" hidden>
+          <span class="resolved-symbol" aria-hidden="true">✓</span>
+          <h3>Everything is resolved</h3>
+          <p>All current support requests have been completed.</p>
+        </div>
+      </section>
+    </div>
+    <footer class="page-footer"><span>Mini IT Support Ticket System</span><span>Ticket data stays in this browser</span></footer>
+  </main>
+</body>
+</html>
