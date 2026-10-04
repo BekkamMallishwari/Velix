@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from velix_agent.core.config import VelixConfig
 
 from velix_agent.core.logging import get_logger
 from velix_agent.core.response import AgentResponse
@@ -78,10 +82,14 @@ class Agent:
         session: Session,
         provider: Provider | None = None,
         tool_registry: ToolRegistry | None = None,
+        config: VelixConfig | None = None,
     ) -> None:
+        from velix_agent.core.config import VelixConfig
+
         self.session = session
         self._provider = provider
         self.tool_registry = tool_registry or ToolRegistry()
+        self.config = config if config is not None else VelixConfig()
         import os
         from pathlib import Path
 
@@ -99,11 +107,11 @@ class Agent:
             )
 
         # 1. Parse input with InputRouter
-        from velix_agent.core.config import VelixConfig
         from velix_agent.core.input_router import InputRouter
 
-        config = VelixConfig()
-        parts = InputRouter.parse(user_input, max_size=config.max_input_file_size, cwd=self.cwd)
+        parts = InputRouter.parse(
+            user_input, max_size=self.config.max_input_file_size, cwd=self.cwd
+        )
 
         # Guard against uninitialized provider
         if self._provider is None:
@@ -173,7 +181,7 @@ class Agent:
                     try:
                         res = tool.execute(**tc.args)
                         duration = time.perf_counter() - start_time
-                        res = _truncate_tool_result(res, config.max_tool_output_size)
+                        res = _truncate_tool_result(res, self.config.max_tool_output_size)
 
                         if res.status == "error":
                             logger.debug(

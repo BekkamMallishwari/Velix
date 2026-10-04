@@ -56,7 +56,7 @@ class Runtime:
         sandbox = SandboxManager()
         tool_registry.register(RunCommandTool(sandbox=sandbox, workspace_root=workspace_root))
 
-        self.agent = Agent(self.session, provider, tool_registry=tool_registry)
+        self.agent = Agent(self.session, provider, tool_registry=tool_registry, config=self.config)
 
     @property
     def debug(self) -> bool:
