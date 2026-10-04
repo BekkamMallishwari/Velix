@@ -41,6 +41,7 @@ class Runtime:
         from velix_agent.tools.read_file import ReadFileTool
         from velix_agent.tools.registry import ToolRegistry
         from velix_agent.tools.run_command import RunCommandTool
+        from velix_agent.tools.search_files import SearchFilesTool
         from velix_agent.tools.write_file import WriteFileTool
 
         provider = get_provider(self.config)
@@ -52,6 +53,7 @@ class Runtime:
         tool_registry.register(WriteFileTool(workspace_root=workspace_root))
         tool_registry.register(EditFileTool(workspace_root=workspace_root))
         tool_registry.register(ListDirectoryTool(workspace_root=workspace_root))
+        tool_registry.register(SearchFilesTool(workspace_root=workspace_root))
 
         sandbox = SandboxManager()
         tool_registry.register(RunCommandTool(sandbox=sandbox, workspace_root=workspace_root))
