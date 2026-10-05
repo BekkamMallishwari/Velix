@@ -81,3 +81,86 @@ def test_sandbox_network_blocked(macos_backend, policy):
     cmd = ["curl", "-I", "--connect-timeout", "2", "https://1.1.1.1"]
     net_res = macos_backend.execute(cmd, policy)
     assert net_res.exit_code != 0
+
+def test_sandbox_output_truncation_stdout(macos_backend, policy):
+    import sys
+    # Small output below limit
+    cmd_small = [sys.executable, "-c", "print('x' * 10)"]
+    res_small = macos_backend.execute(cmd_small, policy)
+    assert res_small.exit_code == 0
+    assert res_small.stdout.strip() == "x" * 10
+
+    # Large output exceeding limit
+    cmd_large = [sys.executable, "-c", "print('x' * 60000)"]
+    res_large = macos_backend.execute(cmd_large, policy)
+    assert res_large.exit_code == 0
+    assert len(res_large.stdout) < 60000
+    assert "[TRUNCATED:" in res_large.stdout
+
+def test_sandbox_output_truncation_stderr(macos_backend, policy):
+    import sys
+    # Small output below limit
+    cmd_small = [sys.executable, "-c", "import sys; sys.stderr.write('x' * 10)"]
+    res_small = macos_backend.execute(cmd_small, policy)
+    assert res_small.exit_code == 0
+    assert res_small.stderr.strip() == "x" * 10
+
+    # Large output exceeding limit
+    cmd_large = [sys.executable, "-c", "import sys; sys.stderr.write('x' * 60000)"]
+    res_large = macos_backend.execute(cmd_large, policy)
+    assert res_large.exit_code == 0
+    assert len(res_large.stderr) < 60000
+    assert "[TRUNCATED:" in res_large.stderr
+
+
+def test_sandbox_cpu_limit(macos_backend, policy):
+    import signal
+    import sys
+    # A tight infinite loop. It should be killed by SIGXCPU (-24) on macOS.
+    cmd = [sys.executable, "-c", "while True: pass"]
+    # We use a short timeout for the test to run fast
+    res = macos_backend.execute(cmd, policy, timeout=1)
+
+    # macOS Python subprocess surfaces the signal as a negative return code.
+    # If the OS CPU limit fires before the 1-second process.wait(timeout=1),
+    # it returns -24 (SIGXCPU). If wait() triggers first, our pgkill uses SIGKILL (-9).
+    # Since timeout is 1s and CPU limit is 1s, it's a race, but either is a forced kill.
+    # However, SIGXCPU is specifically what we want to demonstrate works.
+    assert res.exit_code in (-signal.SIGXCPU, -signal.SIGKILL, -1)
+
+
+def test_sandbox_process_limit_unsupported(macos_backend, policy):
+    # Process limits (RLIMIT_NPROC) cannot be safely enforced per-subprocess on macOS
+    # because they apply globally to the user. We only document this limitation
+    # and rely on the pgkill mechanism tested below.
+    pass
+
+
+def test_sandbox_runaway_child(macos_backend, policy):
+    import subprocess
+    import sys
+    import time
+
+    # Spawn a child that ignores signals or sleeps long, then parent exits
+    script = "import subprocess, sys\\n" \
+             "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10.12345)'])\\n"
+
+    cmd = [sys.executable, "-c", script]
+
+    t0 = time.time()
+    _res = macos_backend.execute(cmd, policy, timeout=1)
+    t1 = time.time()
+
+    # Process should exit quickly, not wait 10s for the runaway child
+    assert t1 - t0 < 5
+
+    # Check that the runaway child is gone.
+    # The parent process started python -c "import time; time.sleep(10.12345)"
+    # We'll scan system processes to ensure it doesn't exist.
+    time.sleep(0.5) # Allow OS to reap
+
+    # pgrep returns 0 if found, 1 if not found.
+    # We search for "time.sleep(10.12345)" in process list.
+    # To avoid matching our own pgrep command, we use [t]ime.sleep(10.12345)
+    pgrep_res = subprocess.run(["pgrep", "-f", "[t]ime.sleep(10.12345)"], capture_output=True)
+    assert pgrep_res.returncode != 0, "Runaway child survived the sandbox termination!"

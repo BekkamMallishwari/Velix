@@ -1,6 +1,12 @@
+import contextlib
 import os
+import platform
+import resource
+import signal
 import subprocess
 import tempfile
+import threading
+import typing
 
 from velix_agent.core.logging import get_logger
 from velix_agent.sandbox.backends.base import SandboxBackend
@@ -66,11 +72,32 @@ class MacOSSandboxBackend(SandboxBackend):
 
         return "\n".join(profile)
 
+    MAX_OUTPUT_BYTES = 50_000
+
+    @staticmethod
+    def _read_stream(
+        stream: typing.IO[bytes],
+        chunks_list: list[bytes],
+        truncated_flag: list[bool]
+    ) -> None:
+        total_bytes = 0
+        while True:
+            chunk = stream.read(4096)
+            if not chunk:
+                break
+
+            if total_bytes < MacOSSandboxBackend.MAX_OUTPUT_BYTES:
+                remaining = MacOSSandboxBackend.MAX_OUTPUT_BYTES - total_bytes
+                chunks_list.append(chunk[:remaining])
+                total_bytes += len(chunk)
+                if len(chunk) > remaining:
+                    truncated_flag[0] = True
+            else:
+                truncated_flag[0] = True
+
     def execute(
         self, command: list[str], policy: SandboxPolicy, timeout: int = 30
     ) -> SandboxResult:
-        import platform
-
         if platform.system() != "Darwin":
             raise SandboxError("MacOSSandboxBackend is only available on macOS.")
 
@@ -79,6 +106,24 @@ class MacOSSandboxBackend(SandboxBackend):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".sb", delete=False) as f:
             f.write(profile_content)
             profile_path = f.name
+
+        def set_limits() -> None:
+            # CPU Limit: Process receives SIGXCPU if it uses more than `timeout` seconds.
+            # We use preexec_fn as it is the only practical mechanism on macOS to enforce
+            # RLIMIT_CPU on the child before execve.
+            with contextlib.suppress(Exception):
+                resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))
+
+            # Note on Process Limits (RLIMIT_NPROC):
+            # RLIMIT_NPROC is per-user on macOS. Enforcing a low limit here restricts the
+            # entire user session, often instantly breaking execution if the user already
+            # has >100 processes running (e.g. Chrome, IDEs). We omit RLIMIT_NPROC and rely
+            # entirely on the killpg timeout cleanup to reap runaway processes instead.
+
+            # Note on Memory Limits (RLIMIT_AS / RLIMIT_DATA):
+            # They cannot be reliably enforced without breaking `execve` (crashing
+            # CoreFoundation or the Python interpreter immediately upon launch).
+            pass
 
         try:
             env = {
@@ -90,24 +135,68 @@ class MacOSSandboxBackend(SandboxBackend):
             sandbox_cmd = ["sandbox-exec", "-f", profile_path, *command]
 
             logger.info(f"Executing sandboxed command: {' '.join(command)}")
-            result = subprocess.run(
+
+            process = subprocess.Popen(
                 sandbox_cmd,
-                capture_output=True,
-                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 env=env,
                 cwd=policy.workspace_root.as_posix(),
-                timeout=timeout,
+                start_new_session=True,  # Isolate process group to kill runaway children
+                preexec_fn=set_limits
             )
 
-            return SandboxResult(
-                stdout=result.stdout,
-                stderr=result.stderr,
-                exit_code=result.returncode,
-                command=command,
+            stdout_chunks: list[bytes] = []
+            stderr_chunks: list[bytes] = []
+            stdout_truncated = [False]
+            stderr_truncated = [False]
+
+            out_thread = threading.Thread(
+                target=self._read_stream,
+                args=(process.stdout, stdout_chunks, stdout_truncated)
             )
-        except subprocess.TimeoutExpired:
+            err_thread = threading.Thread(
+                target=self._read_stream,
+                args=(process.stderr, stderr_chunks, stderr_truncated)
+            )
+            out_thread.daemon = True
+            err_thread.daemon = True
+            out_thread.start()
+            err_thread.start()
+
+            timeout_expired = False
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timeout_expired = True
+                with contextlib.suppress(Exception):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+
+            out_thread.join()
+            err_thread.join()
+
+            stdout_bytes = b"".join(stdout_chunks)
+            stderr_bytes = b"".join(stderr_chunks)
+
+            stdout_str = stdout_bytes.decode("utf-8", errors="replace")
+            stderr_str = stderr_bytes.decode("utf-8", errors="replace")
+
+            if stdout_truncated[0]:
+                stdout_str += "\\n...[TRUNCATED: Output exceeded maximum size limit]..."
+            if stderr_truncated[0]:
+                stderr_str += "\\n...[TRUNCATED: Output exceeded maximum size limit]..."
+
+            if timeout_expired:
+                return SandboxResult(
+                    stdout="", stderr="Command timed out", exit_code=-1, command=command
+                )
+
             return SandboxResult(
-                stdout="", stderr="Command timed out", exit_code=-1, command=command
+                stdout=stdout_str,
+                stderr=stderr_str,
+                exit_code=process.returncode,
+                command=command,
             )
         except Exception as e:
             raise SandboxError(f"Failed to execute sandboxed command: {e}") from e
