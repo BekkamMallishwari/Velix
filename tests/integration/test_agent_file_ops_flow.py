@@ -52,8 +52,9 @@ def test_agent_file_ops_integration_flow(tmp_path):
 
     # 4. Run Command to verify
     # Because of mock.py's split(","), we do command="sh,-c,cat hello.txt"
+    import sys
     cmd_run = (
-        "execute tool run_command command=\"/usr/bin/python3,-c,print(open('hello.txt').read())\""
+        f"execute tool run_command command=\"{sys.executable},-c,print(open('hello.txt').read())\""
     )
     resp_run = agent.respond(cmd_run)
     assert resp_run.status == "success"

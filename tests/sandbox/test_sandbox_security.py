@@ -215,3 +215,15 @@ def test_sandbox_network_denial_localhost(manager, workspace):
         ["ping", "-c", "1", "-t", "1", "127.0.0.1"], workspace_root=workspace, timeout=3
     )
     assert result.exit_code != 0
+
+
+def test_sandbox_read_outside_workspace(manager, workspace, tmp_path):
+    if platform.system() != "Darwin":
+        pytest.skip("Sandbox only supported on macOS")
+
+    outside = tmp_path / "outside_read.txt"
+    outside.write_text("secret")
+    result = manager.execute(["cat", outside.as_posix()], workspace_root=workspace)
+
+    assert result.exit_code != 0
+    assert "secret" not in result.stdout

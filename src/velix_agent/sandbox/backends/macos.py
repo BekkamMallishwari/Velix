@@ -15,9 +15,11 @@ class MacOSSandboxBackend(SandboxBackend):
         home = os.environ.get("HOME", "/tmp")
         profile = [
             "(version 1)",
+            "(deny default)",
             '(import "system.sb")',
             "(allow process-exec)",
             "(allow process-fork)",
+            "(allow file-read-metadata)",
             "(deny file-read*",
             '    (literal "/etc/passwd")',
             '    (literal "/private/etc/passwd")',
@@ -35,6 +37,24 @@ class MacOSSandboxBackend(SandboxBackend):
         profile.append('    (subpath "/System")')
         profile.append('    (subpath "/Library")')
         profile.append('    (subpath "/private/var/select")')
+
+        import sys
+        base_prefix = os.path.realpath(sys.base_prefix)
+        prefix = os.path.realpath(sys.prefix)
+        profile.append(f'    (subpath "{base_prefix}")')
+        if prefix != base_prefix:
+            profile.append(f'    (subpath "{prefix}")')
+        profile.append('    (subpath "/private/etc/ssl")')
+        profile.append('    (subpath "/etc/ssl")')
+        profile.append('    (literal "/dev/urandom")')
+        profile.append('    (literal "/dev/random")')
+        profile.append(")")
+
+        profile.append("(allow file-read* file-write*")
+        profile.append('    (subpath "/tmp")')
+        profile.append('    (subpath "/private/tmp")')
+        profile.append('    (literal "/dev/null")')
+        profile.append('    (literal "/dev/zero")')
         profile.append(")")
 
         workspace_path = policy.workspace_root.resolve().as_posix()
