@@ -80,7 +80,7 @@ def test_empty_query(workspace: Path) -> None:
     tool = SearchFilesTool(workspace_root=workspace)
     res = tool.execute(query="")
     assert res.status == "error"
-    assert res.error and "Missing or empty required argument: 'query'" in res.error
+    assert res.error and "Argument 'query' cannot be empty." in res.error
 
 
 def test_match_limit(workspace: Path) -> None:
@@ -132,3 +132,60 @@ def test_regex_line_length_cap(workspace: Path) -> None:
         res_regex = tool.execute(query="match_me_at_end", is_regex=True)
         assert res_regex.status == "success"
         assert res_regex.data["total_matches"] == 0
+
+def test_missing_query(workspace: Path) -> None:
+    tool = SearchFilesTool(workspace_root=workspace)
+    res = tool.execute()
+    assert res.status == "error"
+    assert "Missing required argument: 'query'" in res.error
+
+def test_query_wrong_type(workspace: Path) -> None:
+    tool = SearchFilesTool(workspace_root=workspace)
+    res = tool.execute(query=123)
+    assert res.status == "error"
+    assert "Argument 'query' must be a string." in res.error
+
+def test_directory_wrong_type(workspace: Path) -> None:
+    tool = SearchFilesTool(workspace_root=workspace)
+    res = tool.execute(query="hello", directory=123)
+    assert res.status == "error"
+    assert "Argument 'directory' must be a string." in res.error
+
+def test_file_pattern_wrong_type(workspace: Path) -> None:
+    tool = SearchFilesTool(workspace_root=workspace)
+    res = tool.execute(query="hello", file_pattern=123)
+    assert res.status == "error"
+    assert "Argument 'file_pattern' must be a string." in res.error
+
+def test_max_results_wrong_type(workspace: Path) -> None:
+    tool = SearchFilesTool(workspace_root=workspace)
+    res = tool.execute(query="hello", max_results="100")
+    assert res.status == "error"
+    assert "Argument 'max_results' must be an integer." in res.error
+
+    res_bool = tool.execute(query="hello", max_results=True)
+    assert res_bool.status == "error"
+    assert "Argument 'max_results' must be an integer." in res_bool.error
+
+def test_max_results_invalid_value(workspace: Path) -> None:
+    tool = SearchFilesTool(workspace_root=workspace)
+    res = tool.execute(query="hello", max_results=0)
+    assert res.status == "error"
+    assert "Argument 'max_results' must be positive." in res.error
+
+def test_regex_wrong_type(workspace: Path) -> None:
+    tool = SearchFilesTool(workspace_root=workspace)
+    res = tool.execute(query="hello", is_regex="true")
+    assert res.status == "error"
+    assert "Argument 'is_regex' must be a boolean." in res.error
+
+    res2 = tool.execute(query="hello", regex="true")
+    assert res2.status == "error"
+    assert "Argument 'regex' must be a boolean." in res2.error
+
+def test_valid_max_results(workspace: Path) -> None:
+    tool = SearchFilesTool(workspace_root=workspace)
+    res = tool.execute(query="hello", max_results=1)
+    assert res.status == "success"
+    assert res.data["total_matches"] == 1
+    assert res.data["truncated"] is True

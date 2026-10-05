@@ -38,6 +38,25 @@ class MockSandboxManager(SandboxManager):
         self.last_command = command
         if self.should_fail:
             raise SandboxError("Mock sandbox rejection")
+
+        # Simulate timeout if requested
+        if command and command[0] == "sleep":
+            return SandboxResult(
+                stdout="",
+                stderr="Command timed out",
+                exit_code=-1,
+                command=command,
+            )
+
+        # Simulate non-zero exit code
+        if command and command[0] == "false":
+            return SandboxResult(
+                stdout="",
+                stderr="Command failed",
+                exit_code=1,
+                command=command,
+            )
+
         return SandboxResult(
             stdout="mock output",
             stderr="",
@@ -150,6 +169,39 @@ def test_list_directory_tool_success(workspace):
     assert items[1]["type"] == "file"
 
 
+def test_list_directory_tool_truncation(workspace, monkeypatch):
+    from velix_agent.tools import list_directory
+    monkeypatch.setattr(list_directory, "MAX_ITEMS", 5)
+
+    tool = list_directory.ListDirectoryTool(workspace_root=workspace)
+
+    # 4 items -> no truncation
+    for i in range(4):
+        (workspace / f"file_{i}.txt").write_text("")
+
+    result = tool.execute(dir_path=".")
+    assert result.status == "success"
+    assert len(result.data["items"]) == 4
+    assert "truncated" not in result.data
+
+    # exactly 5 items -> no truncation
+    (workspace / "file_4.txt").write_text("")
+    result = tool.execute(dir_path=".")
+    assert result.status == "success"
+    assert len(result.data["items"]) == 5
+    assert "truncated" not in result.data
+
+    # 6 items -> truncation
+    (workspace / "file_5.txt").write_text("")
+    result = tool.execute(dir_path=".")
+    assert result.status == "success"
+    assert len(result.data["items"]) == 6 # 5 actual + 1 warning
+    assert result.data["items"][-1]["type"] == "warning"
+    assert "Truncated" in result.data["items"][-1]["name"]
+    assert result.data["truncated"] is True
+    assert "the directory contains more than" in result.data["warning"].lower()
+
+
 def test_list_directory_tool_empty(workspace):
     tool = ListDirectoryTool(workspace_root=workspace)
     result = tool.execute(dir_path=".")
@@ -232,6 +284,29 @@ def test_run_command_tool_invalid_args(workspace):
     result = tool.execute(command="echo test")  # String instead of list
     assert result.status == "error"
     assert "must be a list of strings" in result.error
+
+
+def test_run_command_tool_timeout(workspace):
+    mock_sandbox = MockSandboxManager()
+    tool = RunCommandTool(sandbox=mock_sandbox, workspace_root=workspace)
+
+    result = tool.execute(command=["sleep", "10"])
+    assert result.status == "error"
+    assert "Command timed out" in result.error
+    assert result.data["exit_code"] == -1
+    assert result.data["stderr"] == "Command timed out"
+
+
+def test_run_command_tool_nonzero_exit_code(workspace):
+    mock_sandbox = MockSandboxManager()
+    tool = RunCommandTool(sandbox=mock_sandbox, workspace_root=workspace)
+
+    result = tool.execute(command=["false"])
+    # Tool succeeds in executing the command, even if the command exits with non-zero
+    assert result.status == "success"
+    assert result.data["exit_code"] == 1
+    assert result.data["success"] is False
+    assert result.data["stderr"] == "Command failed"
 
 
 # --- Test ToolRegistry ---

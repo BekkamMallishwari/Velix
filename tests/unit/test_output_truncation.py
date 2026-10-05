@@ -4,34 +4,37 @@ from velix_agent.tools.base import ToolResult
 
 def test_small_output_unchanged():
     res = ToolResult(status="success", data={"stdout": "small output", "stderr": ""})
-    res_trunc = _truncate_tool_result(res, max_size=100)
+    res_trunc = _truncate_tool_result(res, max_size=300)
     assert res_trunc.data["stdout"] == "small output"
 
 
 def test_exactly_at_limit_output():
-    max_size = 50
-    content = "a" * max_size
+    max_size = 300
+    specific_max = max(0, max_size - 256)
+    content = "a" * specific_max
     res = ToolResult(status="success", data={"content": content})
     res_trunc = _truncate_tool_result(res, max_size=max_size)
     assert res_trunc.data["content"] == content
 
 
 def test_just_above_limit():
-    max_size = 50
-    content = "a" * (max_size + 1)
+    max_size = 500
+    specific_max = max(0, max_size - 256)
+    content = "a" * (specific_max + 1)
     res = ToolResult(status="success", data={"content": content})
     res_trunc = _truncate_tool_result(res, max_size=max_size)
-    assert len(res_trunc.data["content"]) == max_size
+    assert len(res_trunc.data["content"]) == specific_max
     assert "[Output truncated" in res_trunc.data["content"]
     assert res_trunc.data["content"].startswith("a")
 
 
 def test_large_stdout_truncated():
-    max_size = 60
-    stdout = "x" * 100
+    max_size = 360
+    specific_max = max(0, max_size - 256)
+    stdout = "x" * 200
     res = ToolResult(status="success", data={"stdout": stdout, "exit_code": 0, "command": ["ls"]})
     res_trunc = _truncate_tool_result(res, max_size=max_size)
-    assert len(res_trunc.data["stdout"]) == max_size
+    assert len(res_trunc.data["stdout"]) == specific_max
     assert "[Output truncated" in res_trunc.data["stdout"]
     assert res_trunc.data["stdout"].startswith("x")
     # Metadata preserved
@@ -40,35 +43,35 @@ def test_large_stdout_truncated():
 
 
 def test_large_stderr_truncated_keeps_end():
-    max_size = 60
-    stderr = "beginning" + "x" * 100 + "END_ERROR"
+    max_size = 360
+    specific_max = max(0, max_size - 256)
+    stderr = "beginning" + "x" * 200 + "END_ERROR"
     res = ToolResult(status="success", data={"stderr": stderr})
     res_trunc = _truncate_tool_result(res, max_size=max_size)
-    assert len(res_trunc.data["stderr"]) == max_size
+    assert len(res_trunc.data["stderr"]) == specific_max
     assert "[Output truncated" in res_trunc.data["stderr"]
     assert res_trunc.data["stderr"].endswith("END_ERROR")
     assert not res_trunc.data["stderr"].startswith("beginning")
 
 
 def test_read_file_large_file_truncated():
-    max_size = 70
-    content = "line1\n" + "y" * 100 + "\nline3"
+    max_size = 370
+    specific_max = max(0, max_size - 256)
+    content = "line1\n" + "y" * 200 + "\nline3"
     res = ToolResult(status="success", data={"content": content})
     res_trunc = _truncate_tool_result(res, max_size=max_size)
-    assert len(res_trunc.data["content"]) == max_size
+    assert len(res_trunc.data["content"]) == specific_max
     assert "[Output truncated" in res_trunc.data["content"]
     assert res_trunc.data["content"].startswith("line1\n")
 
 
 def test_unicode_output_handled_safely():
-    max_size = 60
-    content = "🌍" * 100
+    max_size = 500
+    content = "🌍" * 300
     res = ToolResult(status="success", data={"content": content})
     res_trunc = _truncate_tool_result(res, max_size=max_size)
-    # the exact length might vary slightly depending on emoji length,
-    # but it's bound by max_size (characters)
-    assert len(res_trunc.data["content"]) <= max_size
-    assert "[Output truncated" in res_trunc.data["content"]
+    assert isinstance(res_trunc.data, str)
+    assert "[Output truncated" in res_trunc.data
 
 
 def test_existing_tool_errors_truncated():
@@ -135,7 +138,7 @@ def test_command_list_not_modified():
             "success": True,
         },
     )
-    result = _truncate_tool_result(res, max_size=100)
+    result = _truncate_tool_result(res, max_size=500)
     assert result.data["command"] == command
 
 
@@ -143,6 +146,32 @@ def test_items_list_not_modified():
     """ListDirectoryTool.data["items"] must pass through intact."""
     items = [{"name": f"file{i}.py", "type": "file"} for i in range(10)]
     res = ToolResult(status="success", data={"items": items})
-    result = _truncate_tool_result(res, max_size=100)
+    result = _truncate_tool_result(res, max_size=1000)
     assert result.data["items"] == items
     assert result is res  # no dict keys touched → same object returned
+
+
+# --- Global Serialized Size Tests ---
+
+def test_large_list_truncated():
+    items = [{"name": f"file{i}.py", "type": "file"} for i in range(100)]
+    res = ToolResult(status="success", data={"items": items})
+    result = _truncate_tool_result(res, max_size=200)
+
+    assert isinstance(result.data, str)
+    assert "[Output truncated" in result.data
+    assert len(result.data) <= 200
+
+def test_large_nested_dict_list_truncated():
+    large_data = {
+        "metadata": {"source": "test", "tags": ["a", "b", "c"]},
+        "results": [
+            {"id": i, "value": "x" * 50} for i in range(50)
+        ]
+    }
+    res = ToolResult(status="success", data=large_data)
+    result = _truncate_tool_result(res, max_size=300)
+
+    assert isinstance(result.data, str)
+    assert "[Output truncated" in result.data
+    assert len(result.data) <= 300

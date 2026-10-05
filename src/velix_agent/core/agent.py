@@ -37,37 +37,84 @@ def _truncate_string(s: str, max_size: int, keep_end: bool = False) -> str:
 def _truncate_tool_result(res: ToolResult, max_size: int) -> ToolResult:
     """Safely limits the size of fields in a ToolResult."""
     import copy
+    import json
 
     if res.status == "error" and res.error:
         truncated_error = _truncate_string(res.error, max_size, keep_end=True)
         return ToolResult(
             status=res.status, data=res.data, error=truncated_error, metadata=res.metadata
         )
-    elif isinstance(res.data, str):
-        # Bare string data: truncate keeping the head (same semantics as "content").
+
+    if res.data is None:
+        return res
+
+    if isinstance(res.data, str):
         truncated_data = _truncate_string(res.data, max_size, keep_end=False)
         if truncated_data is not res.data:
             return ToolResult(
                 status=res.status, data=truncated_data, error=res.error, metadata=res.metadata
             )
-    elif res.data and isinstance(res.data, dict):
-        # We must copy the dict to avoid modifying original frozen data references
+        return res
+
+    new_data = res.data
+    changed = False
+
+    if isinstance(res.data, dict):
         new_data = copy.deepcopy(res.data)
-        changed = False
+        # Leave a 256-byte allowance for JSON overhead so dict structure survives
+        specific_max = max(0, max_size - 256)
         # Truncate specific known fields that can be large
-        if "content" in new_data and isinstance(new_data["content"], str):
-            new_data["content"] = _truncate_string(new_data["content"], max_size, keep_end=False)
-            changed = True
-        if "stdout" in new_data and isinstance(new_data["stdout"], str):
-            new_data["stdout"] = _truncate_string(new_data["stdout"], max_size, keep_end=False)
-            changed = True
-        if "stderr" in new_data and isinstance(new_data["stderr"], str):
-            new_data["stderr"] = _truncate_string(new_data["stderr"], max_size, keep_end=True)
-            changed = True
-        if changed:
-            return ToolResult(
-                status=res.status, data=new_data, error=res.error, metadata=res.metadata
+        if (
+            "content" in new_data
+            and isinstance(new_data["content"], str)
+            and len(new_data["content"]) > specific_max
+        ):
+            new_data["content"] = _truncate_string(
+                new_data["content"], specific_max, keep_end=False
             )
+            changed = True
+        if (
+            "stdout" in new_data
+            and isinstance(new_data["stdout"], str)
+            and len(new_data["stdout"]) > specific_max
+        ):
+            new_data["stdout"] = _truncate_string(
+                new_data["stdout"], specific_max, keep_end=False
+            )
+            changed = True
+        if (
+            "stderr" in new_data
+            and isinstance(new_data["stderr"], str)
+            and len(new_data["stderr"]) > specific_max
+        ):
+            new_data["stderr"] = _truncate_string(
+                new_data["stderr"], specific_max, keep_end=True
+            )
+            changed = True
+    elif isinstance(res.data, list):
+        new_data = copy.deepcopy(res.data)
+
+    # Global serialized size protection
+    try:
+        serialized = json.dumps(new_data)
+        if len(serialized) > max_size:
+            # Fall back to a raw truncated string
+            trunc_msg = "\n...[Output truncated due to size limit]...\n"
+            actual_max = max_size - len(trunc_msg)
+            final_data = trunc_msg if actual_max <= 0 else serialized[:actual_max] + trunc_msg
+
+            return ToolResult(
+                status=res.status, data=final_data, error=res.error, metadata=res.metadata
+            )
+    except Exception:
+        # Fallback if json.dumps fails (e.g., non-serializable objects)
+        pass
+
+    if changed:
+        return ToolResult(
+            status=res.status, data=new_data, error=res.error, metadata=res.metadata
+        )
+
     return res
 
 

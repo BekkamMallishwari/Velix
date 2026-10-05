@@ -5,6 +5,8 @@ from typing import Any
 
 from velix_agent.tools.base import Tool, ToolResult
 
+MAX_ITEMS = 1000
+
 
 class ListDirectoryTool(Tool):
     """Tool for listing directory contents within the allowed workspace."""
@@ -58,8 +60,12 @@ class ListDirectoryTool(Tool):
                     status="error", error=f"Path is a file, not a directory: {dir_path_str}"
                 )
 
-            items = []
+            items: list[dict[str, str]] = []
+            has_more = False
             for item in target_path.iterdir():
+                if len(items) >= MAX_ITEMS:
+                    has_more = True
+                    break
                 items.append(
                     {
                         "name": item.name,
@@ -70,7 +76,17 @@ class ListDirectoryTool(Tool):
             # Sort items by name for consistent output
             items.sort(key=lambda x: x["name"])
 
-            return ToolResult(status="success", data={"items": items})
+            data: dict[str, Any] = {"items": items}
+            if has_more:
+                msg = f"Result truncated. The directory contains more than {MAX_ITEMS} items."
+                data["truncated"] = True
+                data["warning"] = msg
+                items.append({
+                    "name": f"... [Truncated: >{MAX_ITEMS} items]",
+                    "type": "warning"
+                })
+
+            return ToolResult(status="success", data=data)
 
         except PermissionError as e:
             msg = str(e)

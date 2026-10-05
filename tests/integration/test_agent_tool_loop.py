@@ -105,8 +105,7 @@ def test_malformed_arguments(tmp_path: Path) -> None:
         if msg.role == "user" and isinstance(msg.content, list):
             for part in msg.content:
                 if isinstance(part, ToolResultPart) and part.tool_name == "search_files":
-                    # search_files explicitly catches empty query and returns error
-                    assert "Missing or empty required argument" in str(part.error)
+                    assert "Missing required argument" in str(part.error)
                     found_error = True
     assert found_error
 

@@ -408,3 +408,7 @@ def test_edit_file_invalid_args(tmp_path):
     res5 = tool.execute(file_path=123, old_text="a", new_text="b")
     assert res5.status == "error"
     assert "Argument 'file_path' must be a string" in res5.error
+
+    res6 = tool.execute(file_path="test.txt", old_text="", new_text="b")
+    assert res6.status == "error"
+    assert "Argument 'old_text' cannot be empty." in res6.error

@@ -60,6 +60,18 @@ class RunCommandTool(Tool):
             # We strictly pass the command to the sandbox manager
             result = self.sandbox.execute(command=command, workspace_root=self.workspace_root)
 
+            if result.exit_code == -1 and "timed out" in result.stderr.lower():
+                return ToolResult(
+                    status="error",
+                    error="Command timed out",
+                    data={
+                        "command": result.command,
+                        "exit_code": result.exit_code,
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
+                    }
+                )
+
             return ToolResult(
                 status="success",
                 data={
