@@ -2,9 +2,13 @@ name: Windows Sandbox CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+      - feat/tool-layer
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   test-windows:
