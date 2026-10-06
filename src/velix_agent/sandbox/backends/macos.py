@@ -10,13 +10,26 @@ import typing
 
 from velix_agent.core.logging import get_logger
 from velix_agent.sandbox.backends.base import SandboxBackend
-from velix_agent.sandbox.policy import SandboxPolicy
+from velix_agent.sandbox.policy import SandboxCapabilities, SandboxPolicy
 from velix_agent.sandbox.result import SandboxError, SandboxResult
 
 logger = get_logger("sandbox.macos")
 
 
 class MacOSSandboxBackend(SandboxBackend):
+    @classmethod
+    def get_capabilities(cls) -> SandboxCapabilities:
+        return SandboxCapabilities(
+            filesystem_isolation="SUPPORTED",
+            network_isolation="SUPPORTED",
+            cpu_limit="SUPPORTED",
+            memory_limit="UNSUPPORTED",
+            process_limit="UNSUPPORTED",
+            timeout="SUPPORTED",
+            output_limit="SUPPORTED",
+            secret_filtering="SUPPORTED",
+        )
+
     def _generate_profile(self, policy: SandboxPolicy) -> str:
         home = os.environ.get("HOME", "/tmp")
         profile = [

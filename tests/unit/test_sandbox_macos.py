@@ -1,5 +1,6 @@
 import os
 import platform
+import typing
 from pathlib import Path
 
 import pytest
@@ -9,13 +10,13 @@ from velix_agent.sandbox.policy import SandboxPolicy
 
 
 @pytest.fixture
-def macos_backend():
+def macos_backend() -> MacOSSandboxBackend:
     if platform.system() != "Darwin":
         pytest.skip("macOS specific test")
     return MacOSSandboxBackend()
 
 @pytest.fixture
-def workspace_root(tmp_path):
+def workspace_root(tmp_path: typing.Any) -> Path:
     # We want to test with the actual project root for some tests to use .venv
     # but for isolation, a tmp path is generally better.
     # The requirement specifically asks to test ".venv" execution,
@@ -23,20 +24,26 @@ def workspace_root(tmp_path):
     return Path(__file__).parent.parent.parent.resolve()
 
 @pytest.fixture
-def policy(workspace_root):
+def policy(workspace_root: Path) -> SandboxPolicy:
     return SandboxPolicy(workspace_root=workspace_root, allow_network=False)
 
-def test_sandbox_normal_python(macos_backend, policy):
+def test_sandbox_normal_python(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
     result = macos_backend.execute([".venv/bin/python", "-c", "print('hello')"], policy)
     assert result.exit_code == 0
     assert "hello" in result.stdout
 
-def test_sandbox_pytest_venv(macos_backend, policy):
+def test_sandbox_pytest_venv(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
     # Run a very simple, fast test so it doesn't take forever
     result = macos_backend.execute([".venv/bin/pytest", "tests/unit/test_config.py", "-v"], policy)
     assert result.exit_code == 0
 
-def test_sandbox_workspace_read_write(macos_backend, policy):
+def test_sandbox_workspace_read_write(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
     test_file = policy.workspace_root / "test_sandbox_rw.txt"
     try:
         write_res = macos_backend.execute(["sh", "-c", f"echo 'test' > {test_file.name}"], policy)
@@ -49,7 +56,9 @@ def test_sandbox_workspace_read_write(macos_backend, policy):
         if test_file.exists():
             test_file.unlink()
 
-def test_sandbox_outside_workspace_blocked(macos_backend, policy):
+def test_sandbox_outside_workspace_blocked(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
     read_res = macos_backend.execute(["cat", "/etc/hosts"], policy)
     assert read_res.exit_code != 0
 
@@ -58,7 +67,9 @@ def test_sandbox_outside_workspace_blocked(macos_backend, policy):
     write_res2 = macos_backend.execute(["touch", "/etc/sandbox_outside_test.txt"], policy)
     assert write_res2.exit_code != 0
 
-def test_sandbox_ssh_aws_blocked(macos_backend, policy):
+def test_sandbox_ssh_aws_blocked(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
     home = os.environ.get("HOME", "/tmp")
 
     ssh_res = macos_backend.execute(["ls", f"{home}/.ssh"], policy)
@@ -67,14 +78,18 @@ def test_sandbox_ssh_aws_blocked(macos_backend, policy):
     aws_res = macos_backend.execute(["ls", f"{home}/.aws"], policy)
     assert aws_res.exit_code != 0
 
-def test_sandbox_git_blocked(macos_backend, policy):
+def test_sandbox_git_blocked(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
     git_res = macos_backend.execute(["ls", ".git"], policy)
     assert git_res.exit_code != 0
 
     git_write_res = macos_backend.execute(["touch", ".git/test_file"], policy)
     assert git_write_res.exit_code != 0
 
-def test_sandbox_network_blocked(macos_backend, policy):
+def test_sandbox_network_blocked(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
     # Test network blocked. Since we allowed /private/etc/ssl,
     # curl should now fail with a network error, or at least not fail
     # due to openssl.cnf, but it should still fail because network is blocked.
@@ -82,7 +97,9 @@ def test_sandbox_network_blocked(macos_backend, policy):
     net_res = macos_backend.execute(cmd, policy)
     assert net_res.exit_code != 0
 
-def test_sandbox_output_truncation_stdout(macos_backend, policy):
+def test_sandbox_output_truncation_stdout(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
     import sys
     # Small output below limit
     cmd_small = [sys.executable, "-c", "print('x' * 10)"]
@@ -97,7 +114,9 @@ def test_sandbox_output_truncation_stdout(macos_backend, policy):
     assert len(res_large.stdout) < 60000
     assert "[TRUNCATED:" in res_large.stdout
 
-def test_sandbox_output_truncation_stderr(macos_backend, policy):
+def test_sandbox_output_truncation_stderr(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
     import sys
     # Small output below limit
     cmd_small = [sys.executable, "-c", "import sys; sys.stderr.write('x' * 10)"]
@@ -113,7 +132,9 @@ def test_sandbox_output_truncation_stderr(macos_backend, policy):
     assert "[TRUNCATED:" in res_large.stderr
 
 
-def test_sandbox_cpu_limit(macos_backend, policy):
+def test_sandbox_cpu_limit(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
     import signal
     import sys
     # A tight infinite loop. It should be killed by SIGXCPU (-24) on macOS.
@@ -129,14 +150,18 @@ def test_sandbox_cpu_limit(macos_backend, policy):
     assert res.exit_code in (-signal.SIGXCPU, -signal.SIGKILL, -1)
 
 
-def test_sandbox_process_limit_unsupported(macos_backend, policy):
+def test_sandbox_process_limit_unsupported(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
     # Process limits (RLIMIT_NPROC) cannot be safely enforced per-subprocess on macOS
     # because they apply globally to the user. We only document this limitation
     # and rely on the pgkill mechanism tested below.
     pass
 
 
-def test_sandbox_runaway_child(macos_backend, policy):
+def test_sandbox_runaway_child(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
     import subprocess
     import sys
     import time
