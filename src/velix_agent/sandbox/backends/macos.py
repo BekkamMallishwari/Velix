@@ -125,7 +125,7 @@ class MacOSSandboxBackend(SandboxBackend):
             # We use preexec_fn as it is the only practical mechanism on macOS to enforce
             # RLIMIT_CPU on the child before execve.
             with contextlib.suppress(Exception):
-                resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))
+                resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))  # type: ignore[attr-defined]
 
             # Note on Process Limits (RLIMIT_NPROC):
             # RLIMIT_NPROC is per-user on macOS. Enforcing a low limit here restricts the
@@ -183,7 +183,7 @@ class MacOSSandboxBackend(SandboxBackend):
             except subprocess.TimeoutExpired:
                 timeout_expired = True
                 with contextlib.suppress(Exception):
-                    os.killpg(process.pid, signal.SIGKILL)
+                    os.killpg(process.pid, signal.SIGKILL)  # type: ignore[attr-defined]
                 process.wait()
 
             out_thread.join()

@@ -97,20 +97,20 @@ class LinuxSandboxBackend(SandboxBackend):
             # Enforce CPU limit
             if policy.cpu_limit:
                 with contextlib.suppress(Exception):
-                    resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))
+                    resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))  # type: ignore[attr-defined]
 
             # Memory Limit
             if policy.memory_limit:
                 with contextlib.suppress(Exception):
-                    resource.setrlimit(
-                        resource.RLIMIT_AS, (policy.memory_limit, policy.memory_limit)
+                    resource.setrlimit(  # type: ignore[attr-defined]
+                        resource.RLIMIT_AS, (policy.memory_limit, policy.memory_limit)  # type: ignore[attr-defined]
                     )
 
             # Process Limit
             if policy.process_limit:
                 with contextlib.suppress(Exception):
-                    resource.setrlimit(
-                        resource.RLIMIT_NPROC, (policy.process_limit, policy.process_limit)
+                    resource.setrlimit(  # type: ignore[attr-defined]
+                        resource.RLIMIT_NPROC, (policy.process_limit, policy.process_limit)  # type: ignore[attr-defined]
                     )
 
         try:
@@ -156,7 +156,7 @@ class LinuxSandboxBackend(SandboxBackend):
             except subprocess.TimeoutExpired:
                 timeout_expired = True
                 with contextlib.suppress(Exception):
-                    os.killpg(process.pid, signal.SIGKILL)
+                    os.killpg(process.pid, signal.SIGKILL)  # type: ignore[attr-defined]
                 process.wait()
 
             out_thread.join()

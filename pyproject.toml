@@ -84,3 +84,11 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 mypy_path = "src"
 packages = ["velix_agent"]
+
+[[tool.mypy.overrides]]
+module = [
+    "velix_agent.sandbox.backends.windows",
+    "velix_agent.sandbox.backends.linux",
+    "velix_agent.sandbox.backends.macos"
+]
+warn_unused_ignores = false
