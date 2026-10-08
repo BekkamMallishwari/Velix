@@ -21,7 +21,7 @@ class MockAgent:
         self.memory_injections.append((user_input, parts))
         parts.append("memory_injected")
 
-    def execute_turn(self, new_messages: list[Message]) -> AgentResponse | None:
+    def execute_turn(self, new_messages: list[Message], budget: Any = None) -> AgentResponse | None:
         if self.turn_count >= len(self.turns):
             return AgentResponse(text="", status="success")
 

@@ -21,7 +21,7 @@ class CodingAgent:
     def __init__(self, agent: Agent) -> None:
         self.agent = agent
 
-    def execute_step(self, step: TaskStep) -> StepExecutionResult:
+    def execute_step(self, step: TaskStep, budget: Any = None) -> StepExecutionResult:
         """Execute one logical TaskStep. Returns a StepExecutionResult for the Orchestrator."""
         prompt = (
             f"Execute step: {step.title}\n"
@@ -37,9 +37,10 @@ class CodingAgent:
 
         # MAX_STEPS bounds the internal loop, but we will abort early on any tool error.
         MAX_STEPS = 5
+        tool_call_count = 0
 
         for _ in range(MAX_STEPS):
-            res = self.agent.execute_turn(new_messages)
+            res = self.agent.execute_turn(new_messages, budget=budget)
 
             if res is not None:
                 # LLM gave a final answer or hit an error
@@ -54,7 +55,7 @@ class CodingAgent:
                         exit_code=1,
                     )
                     return StepExecutionResult(
-                        step_id=step.step_id, analysis=analysis, error=res.error
+                        step_id=step.step_id, analysis=analysis, error=res.error, tool_call_count=tool_call_count
                     )
                 else:
                     analysis = AnalysisResult(
@@ -67,7 +68,7 @@ class CodingAgent:
                         exit_code=0,
                     )
                     return StepExecutionResult(
-                        step_id=step.step_id, analysis=analysis, output_context=res.text or ""
+                        step_id=step.step_id, analysis=analysis, output_context=res.text or "", tool_call_count=tool_call_count
                     )
 
             # Check if tools were executed this turn
@@ -75,6 +76,7 @@ class CodingAgent:
             if last_msg.role == "user" and isinstance(last_msg.content, list):
                 for part in last_msg.content:
                     if isinstance(part, ToolResultPart):
+                        tool_call_count += 1
                         # Tool level error (e.g., Unknown tool, invalid args)
                         if part.error:
                             analysis = AnalysisResult(
@@ -87,7 +89,7 @@ class CodingAgent:
                                 exit_code=1,
                             )
                             return StepExecutionResult(
-                                step_id=step.step_id, analysis=analysis, error=part.error
+                                step_id=step.step_id, analysis=analysis, error=part.error, tool_call_count=tool_call_count
                             )
 
                         # Check sandbox tool execution status
@@ -105,6 +107,7 @@ class CodingAgent:
                                     step_id=step.step_id,
                                     analysis=analysis,
                                     error=analysis.reason,
+                                    tool_call_count=tool_call_count
                                 )
 
         # Exceeded internal iteration limit
@@ -117,4 +120,4 @@ class CodingAgent:
             timeout=True,
             exit_code=-1,
         )
-        return StepExecutionResult(step_id=step.step_id, analysis=analysis, error="Timeout")
+        return StepExecutionResult(step_id=step.step_id, analysis=analysis, error="Timeout", tool_call_count=tool_call_count)

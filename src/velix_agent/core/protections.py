@@ -1,10 +1,35 @@
 """Agent protection and safety components."""
 
 import json
-from typing import Any
+from typing import Any, Optional
+import time
+from dataclasses import dataclass
 
 from velix_agent.core.message import Message, ToolCallPart
 
+@dataclass
+class ExecutionBudget:
+    """A per-run execution budget passed down to enforce tool limits before execution."""
+    max_tool_invocations: int = 50
+    max_time_seconds: int = 900
+    total_tool_calls: int = 0
+    start_time: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if self.start_time is None:
+            self.start_time = time.time()
+
+    def is_time_exceeded(self) -> bool:
+        if self.start_time is None:
+            return False
+        return (time.time() - self.start_time) > self.max_time_seconds
+
+    def consume_tool(self) -> bool:
+        """Attempt to consume one tool call from the budget. Returns False if exceeded."""
+        if self.total_tool_calls >= self.max_tool_invocations:
+            return False
+        self.total_tool_calls += 1
+        return True
 
 class RepeatedActionDetector:
     """Detects when the LLM gets stuck calling the same tool with identical arguments."""

@@ -36,11 +36,19 @@ class AutonomousCodingLoop:
         executor = CodingAgent(self.agent)
 
         # 3. Setup Orchestrator
+        from velix_agent.orchestrator.models import ExecutionLimits
+        limits = ExecutionLimits(
+            max_total_attempts=25,
+            max_tool_invocations=50,
+            max_time_seconds=900
+        )
+
         controller = OrchestratorController(
             plan=plan,
             executor=executor,
             runtime_manager=self.planner.runtime_manager,
             sandbox_manager=self.planner.sandbox_manager,
+            limits=limits,
         )
 
         # 4. Run loop

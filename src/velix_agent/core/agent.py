@@ -164,7 +164,7 @@ class Agent:
         except Exception as e:
             logger.warning("Failed to inject passive memory: %s", e)
 
-    def execute_turn(self, new_messages: list[Message]) -> AgentResponse | None:
+    def execute_turn(self, new_messages: list[Message], budget: Any = None) -> AgentResponse | None:
         """Execute exactly one turn (LLM generation + tool execution). Returns AgentResponse if final, else None."""
         from velix_agent.core.message import Message, MessagePart, TextPart, ToolResultPart
         import time
@@ -199,6 +199,45 @@ class Agent:
 
         for tc in response.tool_calls:
             start_time = time.perf_counter()
+
+            if budget is not None:
+                if budget.is_time_exceeded():
+                    duration = time.perf_counter() - start_time
+                    error_msg = "Global execution time limit exceeded."
+                    logger.debug(
+                        "Tool execution: name=%s id=%s status=error duration=%.3fs error=%r",
+                        tc.tool_name,
+                        tc.id,
+                        duration,
+                        error_msg,
+                    )
+                    tool_results.append(
+                        ToolResultPart(
+                            tool_name=tc.tool_name,
+                            error=error_msg,
+                            tool_call_id=tc.id,
+                        )
+                    )
+                    continue
+
+                if not budget.consume_tool():
+                    duration = time.perf_counter() - start_time
+                    error_msg = "Global tool invocation limit reached."
+                    logger.debug(
+                        "Tool execution: name=%s id=%s status=error duration=%.3fs error=%r",
+                        tc.tool_name,
+                        tc.id,
+                        duration,
+                        error_msg,
+                    )
+                    tool_results.append(
+                        ToolResultPart(
+                            tool_name=tc.tool_name,
+                            error=error_msg,
+                            tool_call_id=tc.id,
+                        )
+                    )
+                    continue
 
             if RepeatedActionDetector.check_repeated_calls(new_messages, tc, limit=3):
                 duration = time.perf_counter() - start_time

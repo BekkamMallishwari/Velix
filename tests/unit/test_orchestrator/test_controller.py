@@ -15,7 +15,7 @@ class MockExecutor:
         self.results = results
         self.call_counts: Dict[str, int] = {}
 
-    def execute_step(self, step: TaskStep) -> StepExecutionResult:
+    def execute_step(self, step: TaskStep, budget: Any = None) -> StepExecutionResult:
         self.call_counts[step.step_id] = self.call_counts.get(step.step_id, 0) + 1
         res_list = self.results.get(step.step_id, [])
         if not res_list:
@@ -213,6 +213,7 @@ def test_capability_unavailable() -> None:
 
 
 def test_bounded_history() -> None:
+    from velix_agent.orchestrator.models import ExecutionLimits
     step1 = TaskStep(step_id="1", title="title", description="desc")
     plan = TaskPlan(goal="Goal", steps=[step1])
     
@@ -221,7 +222,8 @@ def test_bounded_history() -> None:
     results.append(create_mock_analysis(ResultClassification.SUCCESS))
     executor = MockExecutor({"1": results})
     
-    ctrl = OrchestratorController(plan=plan, executor=executor, max_step_retries=100)
+    limits = ExecutionLimits(max_total_attempts=100)
+    ctrl = OrchestratorController(plan=plan, executor=executor, max_step_retries=100, limits=limits)
     ctrl.run()
     
     # History should be bounded to 50

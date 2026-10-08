@@ -14,7 +14,7 @@ from velix_agent.sandbox.manager import SandboxManager
 
 
 class StepExecutor(Protocol):
-    def execute_step(self, step: TaskStep) -> StepExecutionResult: ...
+    def execute_step(self, step: TaskStep, budget: Optional[Any] = None) -> StepExecutionResult: ...
 
 
 class OrchestratorController:
@@ -25,6 +25,7 @@ class OrchestratorController:
         runtime_manager: Optional[RuntimeManager] = None,
         sandbox_manager: Optional[SandboxManager] = None,
         max_step_retries: int = 2,
+        limits: Optional[Any] = None,
     ) -> None:
         self.plan = plan
         self.executor = executor
@@ -34,6 +35,18 @@ class OrchestratorController:
         self.context = OrchestratorContext(
             plan_id="plan_1", orchestrator_state=OrchestratorState.READY
         )
+
+        if limits is None:
+            from velix_agent.orchestrator.models import ExecutionLimits
+            limits = ExecutionLimits()
+        self.limits = limits
+
+        from velix_agent.core.protections import ExecutionBudget
+        self.budget = ExecutionBudget(
+            max_tool_invocations=self.limits.max_tool_invocations,
+            max_time_seconds=self.limits.max_time_seconds,
+        )
+        self.context.start_time = self.budget.start_time
 
     def cancel(self) -> None:
         """Cancel execution of the plan."""
@@ -108,6 +121,14 @@ class OrchestratorController:
         ):
             return
 
+        if self.budget.is_time_exceeded():
+            self.context.orchestrator_state = OrchestratorState.FAILED
+            return
+
+        if self.context.total_step_attempts >= self.limits.max_total_attempts:
+            self.context.orchestrator_state = OrchestratorState.FAILED
+            return
+
         next_step = self.get_next_step()
         if not next_step:
             if len(self.context.completed_steps) == len(self.plan.steps):
@@ -124,6 +145,7 @@ class OrchestratorController:
         self.context.orchestrator_state = OrchestratorState.EXECUTING
         next_step.status = StepStatus.IN_PROGRESS
 
+        self.context.total_step_attempts += 1
         attempts = self.context.step_attempts.get(next_step.step_id, 0)
         self.context.step_attempts[next_step.step_id] = attempts + 1
 
@@ -142,7 +164,7 @@ class OrchestratorController:
                     )
                     break
 
-        result = self.executor.execute_step(next_step)
+        result = self.executor.execute_step(next_step, budget=self.budget)
 
         self.context.execution_history.append(result)
         if len(self.context.execution_history) > 50:
@@ -163,6 +185,8 @@ class OrchestratorController:
             self.step()
 
     def _analyze_result(self, step: TaskStep, result: StepExecutionResult) -> None:
+        self.context.total_tool_calls += getattr(result, "tool_call_count", 0)
+
         if not result.analysis:
             self._fail_step(step)
             return
