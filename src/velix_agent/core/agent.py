@@ -195,8 +195,30 @@ class Agent:
 
         tool_results: list[MessagePart] = []
 
+        from velix_agent.core.protections import RepeatedActionDetector
+
         for tc in response.tool_calls:
             start_time = time.perf_counter()
+
+            if RepeatedActionDetector.check_repeated_calls(new_messages, tc, limit=3):
+                duration = time.perf_counter() - start_time
+                error_msg = "Repeated tool call limit reached: identical action attempted too many times."
+                logger.debug(
+                    "Tool execution: name=%s id=%s status=error duration=%.3fs error=%r",
+                    tc.tool_name,
+                    tc.id,
+                    duration,
+                    error_msg,
+                )
+                tool_results.append(
+                    ToolResultPart(
+                        tool_name=tc.tool_name,
+                        error=error_msg,
+                        tool_call_id=tc.id,
+                    )
+                )
+                continue
+
             tool = self.tool_registry.get_tool(tc.tool_name)
             if tool is None:
                 duration = time.perf_counter() - start_time
