@@ -70,9 +70,9 @@ class TaskPlanner:
 
         prompt += "<runtime_capabilities>\n"
         if self.runtime_manager:
-            runtimes = self.runtime_manager.detect_all()
+            runtimes = self.runtime_manager.detect_all(workspace_root=".")
             for name, info in runtimes.items():
-                if info.available:
+                if info.status.name == "SUPPORTED":
                     prompt += f"{name}: available (v{info.version})\n"
                 else:
                     prompt += f"{name}: unavailable\n"
