@@ -12,6 +12,11 @@ engine, etc.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from velix_agent.core.application import AutonomousCodingLoop
+    from velix_agent.planning.planner import TaskPlanner
 
 from rich.console import Console
 
@@ -29,6 +34,9 @@ class Runtime:
     console: Console = field(default_factory=Console)
     session: Session = field(default_factory=Session.create)
     agent: Agent = field(init=False)
+    # Adding TYPE_CHECKING string annotations to avoid top-level cyclic imports
+    planner: "TaskPlanner" = field(init=False)
+    app_loop: "AutonomousCodingLoop" = field(init=False)
 
     def __post_init__(self) -> None:
         import os
@@ -82,6 +90,24 @@ class Runtime:
             tool_registry=tool_registry,
             config=self.config,
             memory_manager=memory_manager,
+        )
+
+        from velix_agent.core.application import AutonomousCodingLoop
+        from velix_agent.planning.planner import TaskPlanner
+        from velix_agent.runtime.manager import RuntimeManager
+
+        runtime_manager = RuntimeManager()
+
+        self.planner = TaskPlanner(
+            provider=provider,
+            memory_manager=memory_manager,
+            runtime_manager=runtime_manager,
+            sandbox_manager=sandbox,
+        )
+
+        self.app_loop = AutonomousCodingLoop(
+            agent=self.agent,
+            planner=self.planner,
         )
 
     @property

@@ -61,9 +61,9 @@ class TaskPlanner:
 
         prompt += "<sandbox_capabilities>\n"
         if self.sandbox_manager:
-            policy = self.sandbox_manager.policy
-            prompt += f"Filesystem Isolation: {policy.filesystem_isolation}\n"
-            prompt += f"Network Isolation: {policy.network_isolation}\n"
+            caps = self.sandbox_manager.get_capabilities()
+            prompt += f"Filesystem Isolation: {caps.filesystem_isolation}\n"
+            prompt += f"Network Isolation: {caps.network_isolation}\n"
         else:
             prompt += "Unknown\n"
         prompt += "</sandbox_capabilities>\n\n"

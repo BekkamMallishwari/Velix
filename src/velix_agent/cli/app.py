@@ -106,10 +106,23 @@ def main(
         elif task is not None:
             # One-shot mode.
             logger.debug("One-shot task: %s", task)
-            from velix_agent.cli.console import print_agent_response
+            from velix_agent.orchestrator.models import OrchestratorState
 
-            response = runtime.agent.respond(task)
-            print_agent_response(runtime.console, response)
+            state = runtime.app_loop.run(task)
+
+            if state == OrchestratorState.COMPLETED:
+                runtime.console.print("\n[green]Task completed successfully.[/green]")
+            elif state == OrchestratorState.FAILED:
+                print_error(runtime.console, "Task failed.")
+                raise typer.Exit(code=1)
+            elif state == OrchestratorState.BLOCKED:
+                print_error(runtime.console, "Task blocked due to missing capabilities.")
+                raise typer.Exit(code=1)
+            elif state == OrchestratorState.CANCELLED:
+                runtime.console.print("\n[yellow]Task cancelled.[/yellow]")
+                raise typer.Exit(code=1)
+            else:
+                runtime.console.print(f"\nTask finished with state: {state}")
         else:
             # Interactive REPL.
             from velix_agent.cli.repl import start_repl
@@ -120,6 +133,8 @@ def main(
         raise typer.Exit(code=1) from exc
     except KeyboardInterrupt:
         raise typer.Exit() from None
+    except typer.Exit:
+        raise
     except Exception as exc:
         if debug:
             raise
