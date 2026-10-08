@@ -112,13 +112,15 @@ class WindowsSandboxBackend(SandboxBackend):
             timeout="SUPPORTED",
             output_limit="SUPPORTED",
             secret_filtering="SUPPORTED",
+            disk_limit="UNSUPPORTED",
+            runtime_isolation="UNSUPPORTED",
+            observability="UNSUPPORTED",
+            security_hardening="UNSUPPORTED",
         )
 
     @staticmethod
     def _read_stream(
-        stream: typing.IO[bytes],
-        chunks_list: list[bytes],
-        truncated_flag: list[bool]
+        stream: typing.IO[bytes], chunks_list: list[bytes], truncated_flag: list[bool]
     ) -> None:
         total_bytes = 0
         while True:
@@ -179,12 +181,19 @@ class WindowsSandboxBackend(SandboxBackend):
                 )
 
             allowed_env = [
-                "PATH", "SystemRoot", "USERPROFILE", "ALLUSERSPROFILE",
-                "SystemDrive", "ProgramData", "ProgramFiles", "ProgramFiles(x86)"
+                "PATH",
+                "SystemRoot",
+                "USERPROFILE",
+                "ALLUSERSPROFILE",
+                "SystemDrive",
+                "ProgramData",
+                "ProgramFiles",
+                "ProgramFiles(x86)",
             ]
             env = {k: os.environ.get(k, "") for k in allowed_env if k in os.environ}
             env["TEMP"] = os.environ.get("TEMP", "")
             env["TMP"] = os.environ.get("TMP", "")
+            env.update(policy.env)
 
             logger.info(f"Executing sandboxed command: {' '.join(command)}")
 
@@ -195,7 +204,7 @@ class WindowsSandboxBackend(SandboxBackend):
                 stderr=subprocess.PIPE,
                 env=env,
                 cwd=workspace_path,
-                creationflags=CREATE_SUSPENDED
+                creationflags=CREATE_SUSPENDED,
             )
 
             process_handle = int(getattr(process, "_handle", 0))
@@ -222,12 +231,10 @@ class WindowsSandboxBackend(SandboxBackend):
             stderr_truncated = [False]
 
             out_thread = threading.Thread(
-                target=self._read_stream,
-                args=(process.stdout, stdout_chunks, stdout_truncated)
+                target=self._read_stream, args=(process.stdout, stdout_chunks, stdout_truncated)
             )
             err_thread = threading.Thread(
-                target=self._read_stream,
-                args=(process.stderr, stderr_chunks, stderr_truncated)
+                target=self._read_stream, args=(process.stderr, stderr_chunks, stderr_truncated)
             )
             out_thread.daemon = True
             err_thread.daemon = True
@@ -261,7 +268,14 @@ class WindowsSandboxBackend(SandboxBackend):
 
             if timeout_expired:
                 return SandboxResult(
-                    stdout="", stderr="Command timed out", exit_code=-1, command=command
+                    stdout="",
+                    stderr="Command timed out",
+                    exit_code=-1,
+                    command=command,
+                    truncation_status={
+                        "stdout": stdout_truncated[0],
+                        "stderr": stderr_truncated[0],
+                    },
                 )
 
             return SandboxResult(
@@ -269,6 +283,7 @@ class WindowsSandboxBackend(SandboxBackend):
                 stderr=stderr_str,
                 exit_code=process.returncode,
                 command=command,
+                truncation_status={"stdout": stdout_truncated[0], "stderr": stderr_truncated[0]},
             )
         except Exception as e:
             raise SandboxError(f"Failed to execute sandboxed command: {e}") from e

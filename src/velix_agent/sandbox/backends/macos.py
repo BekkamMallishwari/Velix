@@ -28,6 +28,10 @@ class MacOSSandboxBackend(SandboxBackend):
             timeout="SUPPORTED",
             output_limit="SUPPORTED",
             secret_filtering="SUPPORTED",
+            disk_limit="UNSUPPORTED",
+            runtime_isolation="UNSUPPORTED",
+            observability="UNSUPPORTED",
+            security_hardening="UNSUPPORTED",
         )
 
     def _generate_profile(self, policy: SandboxPolicy) -> str:
@@ -58,6 +62,7 @@ class MacOSSandboxBackend(SandboxBackend):
         profile.append('    (subpath "/private/var/select")')
 
         import sys
+
         base_prefix = os.path.realpath(sys.base_prefix)
         prefix = os.path.realpath(sys.prefix)
         profile.append(f'    (subpath "{base_prefix}")')
@@ -89,9 +94,7 @@ class MacOSSandboxBackend(SandboxBackend):
 
     @staticmethod
     def _read_stream(
-        stream: typing.IO[bytes],
-        chunks_list: list[bytes],
-        truncated_flag: list[bool]
+        stream: typing.IO[bytes], chunks_list: list[bytes], truncated_flag: list[bool]
     ) -> None:
         total_bytes = 0
         while True:
@@ -144,6 +147,7 @@ class MacOSSandboxBackend(SandboxBackend):
                 "HOME": os.environ.get("HOME", "/tmp"),
                 "USER": os.environ.get("USER", "nobody"),
             }
+            env.update(policy.env)
 
             sandbox_cmd = ["sandbox-exec", "-f", profile_path, *command]
 
@@ -156,7 +160,7 @@ class MacOSSandboxBackend(SandboxBackend):
                 env=env,
                 cwd=policy.workspace_root.as_posix(),
                 start_new_session=True,  # Isolate process group to kill runaway children
-                preexec_fn=set_limits
+                preexec_fn=set_limits,
             )
 
             stdout_chunks: list[bytes] = []
@@ -165,12 +169,10 @@ class MacOSSandboxBackend(SandboxBackend):
             stderr_truncated = [False]
 
             out_thread = threading.Thread(
-                target=self._read_stream,
-                args=(process.stdout, stdout_chunks, stdout_truncated)
+                target=self._read_stream, args=(process.stdout, stdout_chunks, stdout_truncated)
             )
             err_thread = threading.Thread(
-                target=self._read_stream,
-                args=(process.stderr, stderr_chunks, stderr_truncated)
+                target=self._read_stream, args=(process.stderr, stderr_chunks, stderr_truncated)
             )
             out_thread.daemon = True
             err_thread.daemon = True
@@ -202,7 +204,14 @@ class MacOSSandboxBackend(SandboxBackend):
 
             if timeout_expired:
                 return SandboxResult(
-                    stdout="", stderr="Command timed out", exit_code=-1, command=command
+                    stdout="",
+                    stderr="Command timed out",
+                    exit_code=-1,
+                    command=command,
+                    truncation_status={
+                        "stdout": stdout_truncated[0],
+                        "stderr": stderr_truncated[0],
+                    },
                 )
 
             return SandboxResult(
@@ -210,6 +219,7 @@ class MacOSSandboxBackend(SandboxBackend):
                 stderr=stderr_str,
                 exit_code=process.returncode,
                 command=command,
+                truncation_status={"stdout": stdout_truncated[0], "stderr": stderr_truncated[0]},
             )
         except Exception as e:
             raise SandboxError(f"Failed to execute sandboxed command: {e}") from e

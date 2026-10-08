@@ -61,6 +61,9 @@ class VelixConfig(BaseSettings):
         ),
     )
 
+    # --- Memory ------------------------------------------------------------
+    enable_memory: bool = Field(default=True, description="Enable SQLite-based memory system")
+
     # --- History -----------------------------------------------------------
     history_enabled: bool = Field(default=True, description="Enable persistent REPL history")
     history_file: Path = Field(

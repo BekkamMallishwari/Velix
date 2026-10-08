@@ -30,13 +30,15 @@ class LinuxSandboxBackend(SandboxBackend):
             timeout="SUPPORTED",
             output_limit="SUPPORTED",
             secret_filtering="SUPPORTED",
+            disk_limit="UNSUPPORTED",
+            runtime_isolation="UNSUPPORTED",
+            observability="UNSUPPORTED",
+            security_hardening="UNSUPPORTED",
         )
 
     @staticmethod
     def _read_stream(
-        stream: typing.IO[bytes],
-        chunks_list: list[bytes],
-        truncated_flag: list[bool]
+        stream: typing.IO[bytes], chunks_list: list[bytes], truncated_flag: list[bool]
     ) -> None:
         total_bytes = 0
         while True:
@@ -70,22 +72,43 @@ class LinuxSandboxBackend(SandboxBackend):
 
         bwrap_cmd = [
             bwrap_path,
-            "--ro-bind", "/usr", "/usr",
-            "--ro-bind", "/bin", "/bin",
-            "--ro-bind", "/sbin", "/sbin",
-            "--ro-bind", "/lib", "/lib",
-            "--ro-bind", "/lib64", "/lib64",
-            "--ro-bind", "/etc/alternatives", "/etc/alternatives",
-            "--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf",
-            "--ro-bind", "/etc/ssl", "/etc/ssl",
-            "--dev", "/dev",
-            "--proc", "/proc",
-            "--tmpfs", "/tmp",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+            "--ro-bind",
+            "/bin",
+            "/bin",
+            "--ro-bind",
+            "/sbin",
+            "/sbin",
+            "--ro-bind",
+            "/lib",
+            "/lib",
+            "--ro-bind",
+            "/lib64",
+            "/lib64",
+            "--ro-bind",
+            "/etc/alternatives",
+            "/etc/alternatives",
+            "--ro-bind",
+            "/etc/resolv.conf",
+            "/etc/resolv.conf",
+            "--ro-bind",
+            "/etc/ssl",
+            "/etc/ssl",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--tmpfs",
+            "/tmp",
             "--unshare-pid",
             "--unshare-ipc",
             "--unshare-uts",
             "--unshare-cgroup-try",
-            "--bind", workspace_path, workspace_path,
+            "--bind",
+            workspace_path,
+            workspace_path,
         ]
 
         if not policy.allow_network:
@@ -103,14 +126,16 @@ class LinuxSandboxBackend(SandboxBackend):
             if policy.memory_limit:
                 with contextlib.suppress(Exception):
                     resource.setrlimit(  # type: ignore[attr-defined]
-                        resource.RLIMIT_AS, (policy.memory_limit, policy.memory_limit)  # type: ignore[attr-defined]
+                        resource.RLIMIT_AS,
+                        (policy.memory_limit, policy.memory_limit),  # type: ignore[attr-defined]
                     )
 
             # Process Limit
             if policy.process_limit:
                 with contextlib.suppress(Exception):
                     resource.setrlimit(  # type: ignore[attr-defined]
-                        resource.RLIMIT_NPROC, (policy.process_limit, policy.process_limit)  # type: ignore[attr-defined]
+                        resource.RLIMIT_NPROC,
+                        (policy.process_limit, policy.process_limit),  # type: ignore[attr-defined]
                     )
 
         try:
@@ -119,6 +144,7 @@ class LinuxSandboxBackend(SandboxBackend):
             env = {k: os.environ.get(k, "") for k in allowed_env if k in os.environ}
             # Explicity set TMPDIR to /tmp which is a tmpfs in bwrap
             env["TMPDIR"] = "/tmp"
+            env.update(policy.env)
 
             logger.info(f"Executing sandboxed command: {' '.join(command)}")
 
@@ -129,7 +155,7 @@ class LinuxSandboxBackend(SandboxBackend):
                 env=env,
                 cwd=workspace_path,
                 start_new_session=True,
-                preexec_fn=set_limits
+                preexec_fn=set_limits,
             )
 
             stdout_chunks: list[bytes] = []
@@ -138,12 +164,10 @@ class LinuxSandboxBackend(SandboxBackend):
             stderr_truncated = [False]
 
             out_thread = threading.Thread(
-                target=self._read_stream,
-                args=(process.stdout, stdout_chunks, stdout_truncated)
+                target=self._read_stream, args=(process.stdout, stdout_chunks, stdout_truncated)
             )
             err_thread = threading.Thread(
-                target=self._read_stream,
-                args=(process.stderr, stderr_chunks, stderr_truncated)
+                target=self._read_stream, args=(process.stderr, stderr_chunks, stderr_truncated)
             )
             out_thread.daemon = True
             err_thread.daemon = True
@@ -175,7 +199,14 @@ class LinuxSandboxBackend(SandboxBackend):
 
             if timeout_expired:
                 return SandboxResult(
-                    stdout="", stderr="Command timed out", exit_code=-1, command=command
+                    stdout="",
+                    stderr="Command timed out",
+                    exit_code=-1,
+                    command=command,
+                    truncation_status={
+                        "stdout": stdout_truncated[0],
+                        "stderr": stderr_truncated[0],
+                    },
                 )
 
             return SandboxResult(
@@ -183,6 +214,7 @@ class LinuxSandboxBackend(SandboxBackend):
                 stderr=stderr_str,
                 exit_code=process.returncode,
                 command=command,
+                truncation_status={"stdout": stdout_truncated[0], "stderr": stderr_truncated[0]},
             )
         except Exception as e:
             raise SandboxError(f"Failed to execute sandboxed command: {e}") from e

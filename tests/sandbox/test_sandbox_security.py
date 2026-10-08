@@ -149,6 +149,28 @@ def test_sandbox_read_aws_credentials(manager, workspace):
     dummy_creds.unlink()
 
 
+@pytest.mark.parametrize(
+    "cred_file", [".kube/config", ".npmrc", ".docker/config.json", ".gcp/credentials", ".netrc"]
+)
+def test_sandbox_read_various_credentials(manager, workspace, cred_file):
+    if platform.system() != "Darwin":
+        pytest.skip("Sandbox only supported on macOS")
+
+    home = Path(os.environ.get("HOME", "/tmp"))
+    target = home / cred_file
+
+    if not target.parent.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+    target.write_text("secret")
+
+    try:
+        result = manager.execute(["cat", target.as_posix()], workspace_root=workspace)
+        assert result.exit_code != 0
+    finally:
+        target.unlink()
+
+
 def test_sandbox_read_git_dir(manager, workspace):
     if platform.system() != "Darwin":
         pytest.skip("Sandbox only supported on macOS")

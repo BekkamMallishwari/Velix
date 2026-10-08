@@ -43,3 +43,7 @@ htmlcov/
 
 # uv
 uv.lock
+
+# Memory
+.velix/memory.db
+.velix/memory.db-*

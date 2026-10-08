@@ -51,7 +51,7 @@ def test_sandbox_cross_platform_timeout(tmp_path: Path) -> None:
         [sys.executable, "-c", "import time; time.sleep(5)"],
         tmp_path,
         timeout=1,
-        allow_network=allow_net
+        allow_network=allow_net,
     )
 
     assert result.exit_code == -1
@@ -66,10 +66,7 @@ def test_sandbox_cross_platform_workspace_restriction(tmp_path: Path) -> None:
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
 
-    code = (
-        "import os\n"
-        "print(os.getcwd())\n"
-    )
+    code = "import os\nprint(os.getcwd())\n"
     result = manager.execute([sys.executable, "-c", code], tmp_path, allow_network=allow_net)
 
     assert result.exit_code == 0
@@ -99,3 +96,15 @@ def test_sandbox_network_isolation_enforcement(tmp_path: Path) -> None:
         # Must succeed with strict isolation (allow_network=False)
         result = manager.execute(["echo", "hello"], tmp_path, allow_network=False)
         assert result.exit_code == 0
+
+
+@pytest.mark.skipif(
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+)
+def test_sandbox_disk_limit_unsupported() -> None:
+    manager = SandboxManager()
+    caps = manager.get_capabilities()
+
+    # We explicitly verify that NO backend falsely claims disk_limit support
+    # since we don't have a true quota enforcement mechanism implemented.
+    assert caps.disk_limit == "UNSUPPORTED"

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from velix_agent.core.config import VelixConfig
 
 from velix_agent.core.logging import get_logger
+from velix_agent.core.message import Message
 from velix_agent.core.response import AgentResponse
 from velix_agent.core.session import Session
 from velix_agent.providers.base import Provider
@@ -78,18 +79,14 @@ def _truncate_tool_result(res: ToolResult, max_size: int) -> ToolResult:
             and isinstance(new_data["stdout"], str)
             and len(new_data["stdout"]) > specific_max
         ):
-            new_data["stdout"] = _truncate_string(
-                new_data["stdout"], specific_max, keep_end=False
-            )
+            new_data["stdout"] = _truncate_string(new_data["stdout"], specific_max, keep_end=False)
             changed = True
         if (
             "stderr" in new_data
             and isinstance(new_data["stderr"], str)
             and len(new_data["stderr"]) > specific_max
         ):
-            new_data["stderr"] = _truncate_string(
-                new_data["stderr"], specific_max, keep_end=True
-            )
+            new_data["stderr"] = _truncate_string(new_data["stderr"], specific_max, keep_end=True)
             changed = True
     elif isinstance(res.data, list):
         new_data = copy.deepcopy(res.data)
@@ -111,9 +108,7 @@ def _truncate_tool_result(res: ToolResult, max_size: int) -> ToolResult:
         pass
 
     if changed:
-        return ToolResult(
-            status=res.status, data=new_data, error=res.error, metadata=res.metadata
-        )
+        return ToolResult(status=res.status, data=new_data, error=res.error, metadata=res.metadata)
 
     return res
 
@@ -130,6 +125,7 @@ class Agent:
         provider: Provider | None = None,
         tool_registry: ToolRegistry | None = None,
         config: VelixConfig | None = None,
+        memory_manager: Any | None = None,
     ) -> None:
         from velix_agent.core.config import VelixConfig
 
@@ -137,10 +133,157 @@ class Agent:
         self._provider = provider
         self.tool_registry = tool_registry or ToolRegistry()
         self.config = config if config is not None else VelixConfig()
+        self.memory_manager = memory_manager
         import os
         from pathlib import Path
 
         self.cwd = Path(os.getcwd())
+
+    def _inject_project_memory(self, user_input: str, parts: list["Any"]) -> None:
+        """Inject historical project memory into the user's message parts."""
+        if not self.config.enable_memory or not self.memory_manager:
+            return
+
+        try:
+            from velix_agent.core.message import TextPart
+
+            results = self.memory_manager.search(user_input, limit=3)
+            facts = [r for r in results if r.get("memory_type") == "project_fact"][:3]
+
+            if facts:
+                memory_text = "<project_historical_memory>\n"
+                for f in facts:
+                    memory_text += f"- {f['topic']}: {f['content']}\n"
+                memory_text += "</project_historical_memory>\n\n"
+
+                # Ensure strictly bounded to 1000 characters
+                if len(memory_text) > 1000:
+                    memory_text = memory_text[:997] + "..."
+
+                parts.insert(0, TextPart(text=memory_text))
+        except Exception as e:
+            logger.warning("Failed to inject passive memory: %s", e)
+
+    def execute_turn(self, new_messages: list[Message]) -> AgentResponse | None:
+        """Execute exactly one turn (LLM generation + tool execution). Returns AgentResponse if final, else None."""
+        from velix_agent.core.message import Message, MessagePart, TextPart, ToolResultPart
+        import time
+        from velix_agent.core.response import AgentResponse
+
+        if not self._provider:
+            return None
+
+        available_tools = self.tool_registry.list_tools()
+        current_context = self.session.context.get_messages() + new_messages
+        response = self._provider.generate(current_context, tools=available_tools)
+
+        if response.status == "error" or not response.tool_calls:
+            if response.status == "success":
+                for msg in new_messages:
+                    self.session.context.add_message(msg)
+                if response.text:
+                    self.session.context.add_assistant_message(response.text)
+            return response
+
+        assistant_parts: list[MessagePart] = []
+        if response.text:
+            assistant_parts.append(TextPart(text=response.text))
+
+        for tc in response.tool_calls:
+            assistant_parts.append(tc)
+        new_messages.append(Message(role="assistant", content=assistant_parts))
+
+        tool_results: list[MessagePart] = []
+
+        for tc in response.tool_calls:
+            start_time = time.perf_counter()
+            tool = self.tool_registry.get_tool(tc.tool_name)
+            if tool is None:
+                duration = time.perf_counter() - start_time
+                logger.debug(
+                    "Tool execution: name=%s id=%s status=error duration=%.3fs error=%r",
+                    tc.tool_name,
+                    tc.id,
+                    duration,
+                    "Unknown tool",
+                )
+                tool_results.append(
+                    ToolResultPart(
+                        tool_name=tc.tool_name,
+                        error=f"Unknown tool: {tc.tool_name}",
+                        tool_call_id=tc.id,
+                    )
+                )
+                continue
+
+            try:
+                res = tool.execute(**tc.args)
+                duration = time.perf_counter() - start_time
+                res = _truncate_tool_result(res, self.config.max_tool_output_size)
+
+                if res.status == "error":
+                    logger.debug(
+                        "Tool execution: name=%s id=%s status=error "
+                        "duration=%.3fs error=%r",
+                        tc.tool_name,
+                        tc.id,
+                        duration,
+                        res.error,
+                    )
+                    tool_results.append(
+                        ToolResultPart(
+                            tool_name=tc.tool_name, error=res.error, tool_call_id=tc.id
+                        )
+                    )
+                else:
+                    logger.debug(
+                        "Tool execution: name=%s id=%s status=success duration=%.3fs",
+                        tc.tool_name,
+                        tc.id,
+                        duration,
+                    )
+                    tool_results.append(
+                        ToolResultPart(
+                            tool_name=tc.tool_name, data=res.data, tool_call_id=tc.id
+                        )
+                    )
+            except TypeError as e:
+                duration = time.perf_counter() - start_time
+                error_msg = f"Invalid arguments: {e}"
+                logger.debug(
+                    "Tool execution: name=%s id=%s status=error duration=%.3fs error=%r",
+                    tc.tool_name,
+                    tc.id,
+                    duration,
+                    error_msg,
+                )
+                tool_results.append(
+                    ToolResultPart(
+                        tool_name=tc.tool_name,
+                        error=error_msg,
+                        tool_call_id=tc.id,
+                    )
+                )
+            except Exception as e:
+                duration = time.perf_counter() - start_time
+                error_msg = f"Execution error: {e}"
+                logger.debug(
+                    "Tool execution: name=%s id=%s status=error duration=%.3fs error=%r",
+                    tc.tool_name,
+                    tc.id,
+                    duration,
+                    error_msg,
+                )
+                tool_results.append(
+                    ToolResultPart(
+                        tool_name=tc.tool_name,
+                        error=error_msg,
+                        tool_call_id=tc.id,
+                    )
+                )
+
+        new_messages.append(Message(role="user", content=tool_results))
+        return None
 
     def respond(self, user_input: str) -> AgentResponse:
         """Process a user message and generate a response."""
@@ -160,6 +303,9 @@ class Agent:
             user_input, max_size=self.config.max_input_file_size, cwd=self.cwd
         )
 
+        # 2. Inject passive memory if enabled
+        self._inject_project_memory(user_input, parts)
+
         # Guard against uninitialized provider
         if self._provider is None:
             return AgentResponse(
@@ -175,124 +321,11 @@ class Agent:
             new_messages: list[Message] = [Message(role="user", content=parts)]
 
             MAX_ITERATIONS = 5
-            available_tools = self.tool_registry.list_tools()
 
             for _ in range(MAX_ITERATIONS):
-                current_context = self.session.context.get_messages() + new_messages
-                response = self._provider.generate(current_context, tools=available_tools)
-
-                if response.status == "error" or not response.tool_calls:
-                    # Final response reached
-                    if response.status == "success":
-                        # Add all accumulated messages to the session context
-                        for msg in new_messages:
-                            self.session.context.add_message(msg)
-                        if response.text:
-                            self.session.context.add_assistant_message(response.text)
-                    return response
-
-                # We have tool calls
-                # Add the assistant's response with tool calls to new_messages
-                assistant_parts: list[MessagePart] = []
-                if response.text:
-                    assistant_parts.append(TextPart(text=response.text))
-
-                # Safely handle tool_calls which is a list of ToolCallPart
-                for tc in response.tool_calls:
-                    assistant_parts.append(tc)
-                new_messages.append(Message(role="assistant", content=assistant_parts))
-
-                tool_results: list[MessagePart] = []
-
-                for tc in response.tool_calls:
-                    start_time = time.perf_counter()
-                    tool = self.tool_registry.get_tool(tc.tool_name)
-                    if tool is None:
-                        duration = time.perf_counter() - start_time
-                        logger.debug(
-                            "Tool execution: name=%s id=%s status=error duration=%.3fs error=%r",
-                            tc.tool_name,
-                            tc.id,
-                            duration,
-                            "Unknown tool",
-                        )
-                        tool_results.append(
-                            ToolResultPart(
-                                tool_name=tc.tool_name,
-                                error=f"Unknown tool: {tc.tool_name}",
-                                tool_call_id=tc.id,
-                            )
-                        )
-                        continue
-
-                    try:
-                        res = tool.execute(**tc.args)
-                        duration = time.perf_counter() - start_time
-                        res = _truncate_tool_result(res, self.config.max_tool_output_size)
-
-                        if res.status == "error":
-                            logger.debug(
-                                "Tool execution: name=%s id=%s status=error "
-                                "duration=%.3fs error=%r",
-                                tc.tool_name,
-                                tc.id,
-                                duration,
-                                res.error,
-                            )
-                            tool_results.append(
-                                ToolResultPart(
-                                    tool_name=tc.tool_name, error=res.error, tool_call_id=tc.id
-                                )
-                            )
-                        else:
-                            logger.debug(
-                                "Tool execution: name=%s id=%s status=success duration=%.3fs",
-                                tc.tool_name,
-                                tc.id,
-                                duration,
-                            )
-                            tool_results.append(
-                                ToolResultPart(
-                                    tool_name=tc.tool_name, data=res.data, tool_call_id=tc.id
-                                )
-                            )
-                    except TypeError as e:
-                        duration = time.perf_counter() - start_time
-                        error_msg = f"Invalid arguments: {e}"
-                        logger.debug(
-                            "Tool execution: name=%s id=%s status=error duration=%.3fs error=%r",
-                            tc.tool_name,
-                            tc.id,
-                            duration,
-                            error_msg,
-                        )
-                        tool_results.append(
-                            ToolResultPart(
-                                tool_name=tc.tool_name,
-                                error=error_msg,
-                                tool_call_id=tc.id,
-                            )
-                        )
-                    except Exception as e:
-                        duration = time.perf_counter() - start_time
-                        error_msg = f"Execution error: {e}"
-                        logger.debug(
-                            "Tool execution: name=%s id=%s status=error duration=%.3fs error=%r",
-                            tc.tool_name,
-                            tc.id,
-                            duration,
-                            error_msg,
-                        )
-                        tool_results.append(
-                            ToolResultPart(
-                                tool_name=tc.tool_name,
-                                error=error_msg,
-                                tool_call_id=tc.id,
-                            )
-                        )
-
-                # Feed tool results back as a user message
-                new_messages.append(Message(role="user", content=tool_results))
+                res = self.execute_turn(new_messages)
+                if res is not None:
+                    return res
 
             # Exceeded MAX_ITERATIONS
             return AgentResponse(

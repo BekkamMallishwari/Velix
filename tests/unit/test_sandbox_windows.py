@@ -71,10 +71,7 @@ def test_windows_backend_memory_limit(tmp_path: Path) -> None:
     )
 
     # Try to allocate 20MB
-    code = (
-        "a = b'1' * (20 * 1024 * 1024)\n"
-        "print('Allocated')\n"
-    )
+    code = "a = b'1' * (20 * 1024 * 1024)\nprint('Allocated')\n"
     # The process should crash/exit before printing 'Allocated'
     result = backend.execute([sys.executable, "-c", code], policy)
 
@@ -157,10 +154,7 @@ def test_windows_close_handle_on_popen_failure(
 @patch("velix_agent.sandbox.backends.windows.AssignProcessToJobObject")
 @patch("subprocess.Popen")
 def test_windows_failed_job_assignment_cleanup(
-    mock_popen: MagicMock,
-    mock_assign: MagicMock,
-    mock_close_handle: MagicMock,
-    tmp_path: Path
+    mock_popen: MagicMock, mock_assign: MagicMock, mock_close_handle: MagicMock, tmp_path: Path
 ) -> None:
     backend = WindowsSandboxBackend()
     policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
@@ -194,6 +188,7 @@ def test_cross_platform_import() -> None:
     # Importing windows.py should not crash on macOS/Linux
     try:
         from velix_agent.sandbox.backends.windows import WindowsSandboxBackend
+
         WindowsSandboxBackend()
         # This is enough to verify it doesn't crash on import/instantiation
     except Exception as e:

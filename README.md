@@ -21,3 +21,15 @@ Instead of manually copy-pasting code snippets, you simply ask VelixAgent to inv
 - **Interactive REPL & One-Shot Mode:** Work conversationally with persistent history using the interactive REPL, or pass a specific task directly via the CLI for instant one-shot execution.
 - **Multi-Provider Fallback:** Connects to major LLM providers (including Google Gemini, OpenAI, Anthropic, OpenRouter, and local models like Ollama) with an automatic fallback chain if the primary model encounters errors.
 - **Robust Security Constraints:** File operations are strictly sandboxed to prevent arbitrary path traversal, and large outputs are intelligently truncated to optimize the LLM's context window.
+
+---
+
+## Sandbox Architecture
+
+VelixAgent uses a platform-specific sandbox architecture to isolate tool execution:
+
+*   **macOS:** Uses Apple's Seatbelt (`sandbox-exec`) for filesystem, network, and process isolation.
+*   **Linux:** Uses Bubblewrap (`bwrap`) for containerized namespace isolation.
+*   **Windows:** Implements a Two-Tier sandbox approach:
+    *   **Tier 1 (Native Job Object):** The default backend. Uses native Win32 Job Objects. Enforces resource constraints (Memory/Process/Timeout) and strict process-tree cleanup. **Does not require Administrator privileges.** Note: Tier 1 does NOT provide strict filesystem or network isolation.
+    *   **Tier 2 (Windows Container):** (Optional/Future) A stronger isolation backend requiring Docker/Windows Containers for complete filesystem and network sandboxing.

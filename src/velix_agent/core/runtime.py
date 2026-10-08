@@ -58,7 +58,31 @@ class Runtime:
         sandbox = SandboxManager()
         tool_registry.register(RunCommandTool(sandbox=sandbox, workspace_root=workspace_root))
 
-        self.agent = Agent(self.session, provider, tool_registry=tool_registry, config=self.config)
+        memory_manager = None
+        if self.config.enable_memory:
+            try:
+                from velix_agent.memory.store import MemoryManager
+                from velix_agent.tools.delete_memory import DeleteMemoryTool
+                from velix_agent.tools.search_memory import SearchMemoryTool
+                from velix_agent.tools.store_memory import StoreMemoryTool
+
+                memory_manager = MemoryManager(workspace_root=workspace_root)
+                tool_registry.register(StoreMemoryTool(memory_manager=memory_manager))
+                tool_registry.register(SearchMemoryTool(memory_manager=memory_manager))
+                tool_registry.register(DeleteMemoryTool(memory_manager=memory_manager))
+            except Exception as e:
+                # Log but do not crash
+                import logging
+
+                logging.getLogger("runtime").warning("Failed to initialize memory tools: %s", e)
+
+        self.agent = Agent(
+            self.session,
+            provider,
+            tool_registry=tool_registry,
+            config=self.config,
+            memory_manager=memory_manager,
+        )
 
     @property
     def debug(self) -> bool:
