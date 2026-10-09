@@ -96,11 +96,11 @@ def test_sandbox_network_isolation_enforcement(tmp_path: Path) -> None:
             manager.execute(["echo", "hello"], tmp_path, allow_network=False)
 
         # Must succeed if we accept the risk (allow_network=True)
-        result = manager.execute(["echo", "hello"], tmp_path, allow_network=True)
+        result = manager.execute(["echo", "hello"], tmp_path, allow_network=True, mode="BALANCED")
         assert result.exit_code == 0
     else:
         # Must succeed with strict isolation (allow_network=False)
-        result = manager.execute(["echo", "hello"], tmp_path, allow_network=False)
+        result = manager.execute(["echo", "hello"], tmp_path, allow_network=False, mode="BALANCED")
         assert result.exit_code == 0
 
 
