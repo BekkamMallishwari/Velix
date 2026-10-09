@@ -401,6 +401,10 @@ def test_sandbox_environment_clean(
         pytest.skip(
             f"secret_filtering={getattr(caps, 'secret_filtering', 'N/A')} on {_SYSTEM}"
         )
+    if not _needs_fs_isolation(caps):
+        pytest.skip(
+            f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
+        )
     os.environ["AWS_ACCESS_KEY_ID"] = "secret123"
     try:
         cmd = [sys.executable, "-c", "import os; print(list(os.environ.keys()))"]
@@ -430,6 +434,10 @@ def test_sandbox_command_timeout(
         pytest.skip(
             f"timeout={getattr(caps, 'timeout', 'N/A')} on {_SYSTEM}"
         )
+    if not _needs_fs_isolation(caps):
+        pytest.skip(
+            f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
+        )
     result = manager.execute(
         [sys.executable, "-c", "import time; time.sleep(10)"],
         workspace_root=workspace,
@@ -456,6 +464,10 @@ def test_sandbox_stdout_limit(
         pytest.skip(
             f"output_limit={getattr(caps, 'output_limit', 'N/A')} on {_SYSTEM}"
         )
+    if not _needs_fs_isolation(caps):
+        pytest.skip(
+            f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
+        )
     # Produce 60 000 bytes of output — above the 50 000-byte limit
     cmd = [sys.executable, "-c", "print('x' * 60000)"]
     result = manager.execute(cmd, workspace_root=workspace)
@@ -473,6 +485,10 @@ def test_sandbox_stderr_limit(
     if not _needs_output_limit(caps):
         pytest.skip(
             f"output_limit={getattr(caps, 'output_limit', 'N/A')} on {_SYSTEM}"
+        )
+    if not _needs_fs_isolation(caps):
+        pytest.skip(
+            f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
         )
     cmd = [sys.executable, "-c", "import sys; sys.stderr.write('x' * 60000)"]
     result = manager.execute(cmd, workspace_root=workspace)

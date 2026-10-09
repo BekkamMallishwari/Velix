@@ -21,6 +21,7 @@ class LinuxSandboxBackend(SandboxBackend):
 
     _systemd_supported_cache: typing.ClassVar[bool | None] = None
     _unshare_net_supported_cache: typing.ClassVar[bool | None] = None
+    _bwrap_execution_supported_cache: typing.ClassVar[bool | None] = None
 
     @classmethod
     def _detect_systemd(cls) -> bool:
@@ -66,8 +67,26 @@ class LinuxSandboxBackend(SandboxBackend):
         return bool(cls._unshare_net_supported_cache)
 
     @classmethod
+    def _detect_bwrap_execution(cls) -> bool:
+        if cls._bwrap_execution_supported_cache is None:
+            if not shutil.which("bwrap"):
+                cls._bwrap_execution_supported_cache = False
+            else:
+                try:
+                    res = subprocess.run(
+                        ["bwrap", "--bind", "/", "/", "--", "true"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=2,
+                    )
+                    cls._bwrap_execution_supported_cache = (res.returncode == 0)
+                except (OSError, subprocess.TimeoutExpired):
+                    cls._bwrap_execution_supported_cache = False
+        return bool(cls._bwrap_execution_supported_cache)
+
+    @classmethod
     def get_capabilities(cls) -> SandboxCapabilities:
-        has_bwrap = bool(shutil.which("bwrap"))
+        has_bwrap = cls._detect_bwrap_execution()
         if not has_bwrap:
             return SandboxCapabilities(
                 filesystem_isolation="NOT_AVAILABLE",

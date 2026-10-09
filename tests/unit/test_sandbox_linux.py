@@ -15,9 +15,11 @@ from velix_agent.sandbox.result import SandboxError
 def clean_systemd_cache() -> typing.Generator[None, None, None]:
     LinuxSandboxBackend._systemd_supported_cache = None
     LinuxSandboxBackend._unshare_net_supported_cache = None
+    LinuxSandboxBackend._bwrap_execution_supported_cache = None
     yield
     LinuxSandboxBackend._systemd_supported_cache = None
     LinuxSandboxBackend._unshare_net_supported_cache = None
+    LinuxSandboxBackend._bwrap_execution_supported_cache = None
 
 
 def test_linux_capabilities_no_bwrap(clean_systemd_cache: typing.Any) -> None:
