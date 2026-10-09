@@ -3,7 +3,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
-SupportStatus = Literal["SUPPORTED", "UNSUPPORTED", "NOT_AVAILABLE", "NOT_APPLICABLE"]
+SupportStatus = Literal[
+    "SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED", "NOT_AVAILABLE", "NOT_APPLICABLE"
+]
 
 
 @dataclass

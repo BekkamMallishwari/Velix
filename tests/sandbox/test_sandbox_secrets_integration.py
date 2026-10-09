@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pytest
 
@@ -6,11 +7,11 @@ from velix_agent.sandbox.manager import SandboxManager
 
 
 @pytest.fixture
-def sandbox_manager():
+def sandbox_manager() -> SandboxManager:
     return SandboxManager()
 
 
-def test_host_environment_not_inherited(sandbox_manager, tmp_path):
+def test_host_environment_not_inherited(sandbox_manager: SandboxManager, tmp_path: Path) -> None:
     os.environ["SUPER_SECRET_HOST_KEY"] = "host_secret_value"
     try:
         # Check if environment is printed
@@ -27,7 +28,7 @@ def test_host_environment_not_inherited(sandbox_manager, tmp_path):
         del os.environ["SUPER_SECRET_HOST_KEY"]
 
 
-def test_secret_injection_and_redaction(sandbox_manager, tmp_path):
+def test_secret_injection_and_redaction(sandbox_manager: SandboxManager, tmp_path: Path) -> None:
     # Register a secret
     secret_value = "my_custom_injected_secret_123"
 

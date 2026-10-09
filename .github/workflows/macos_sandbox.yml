@@ -1,0 +1,81 @@
+name: macOS Sandbox CI
+
+# Runs macOS-specific sandbox tests using the Apple sandbox-exec (Seatbelt) backend.
+# Security capabilities: filesystem_isolation=SUPPORTED, network_isolation=SUPPORTED,
+# cpu_limit=SUPPORTED, memory_limit=UNSUPPORTED, process_limit=UNSUPPORTED.
+
+on:
+  push:
+    branches:
+      - main
+      - feat/tool-layer
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  test-macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      # Guard: fail fast if sandbox-exec is absent — indicates a broken runner image
+      - name: Verify sandbox-exec is available
+        run: |
+          which sandbox-exec || (echo "ERROR: sandbox-exec not found on macOS runner" && exit 1)
+
+      # Documented capability summary printed for CI log readability
+      - name: Print sandbox capabilities
+        run: |
+          python -c "
+          from velix_agent.sandbox.manager import SandboxManager
+          caps = SandboxManager().get_capabilities()
+          print('filesystem_isolation :', caps.filesystem_isolation)
+          print('network_isolation    :', caps.network_isolation)
+          print('timeout              :', caps.timeout)
+          print('output_limit         :', caps.output_limit)
+          print('secret_filtering     :', caps.secret_filtering)
+          print('memory_limit         :', caps.memory_limit)
+          print('process_limit        :', caps.process_limit)
+          print('disk_limit           :', caps.disk_limit)
+          "
+
+      - name: Run macOS backend unit tests
+        run: |
+          python -m pytest tests/unit/test_sandbox_macos.py -v --tb=short
+
+      - name: Run cross-platform sandbox tests
+        run: |
+          python -m pytest tests/unit/test_sandbox_cross_platform.py -v --tb=short
+
+      - name: Run sandbox security tests (macOS)
+        run: |
+          python -m pytest tests/sandbox/test_sandbox_security.py -v --tb=short
+
+      - name: Run sandbox secrets integration tests
+        run: |
+          python -m pytest tests/sandbox/test_sandbox_secrets_integration.py -v --tb=short
+
+      - name: Run bounded sandbox stress tests
+        run: |
+          python -m pytest tests/sandbox/test_sandbox_stress.py -v --tb=short
+
+      - name: Run Ruff
+        run: |
+          ruff check tests/sandbox/
+
+      - name: Run Mypy
+        run: |
+          mypy src/velix_agent/sandbox/

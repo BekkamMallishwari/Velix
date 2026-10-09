@@ -1,0 +1,102 @@
+name: Linux Sandbox CI
+
+# Runs Linux-specific sandbox tests using the Bubblewrap (bwrap) backend.
+# Security capabilities: filesystem_isolation=SUPPORTED, network_isolation=SUPPORTED,
+# cpu_limit=SUPPORTED, memory_limit=SUPPORTED, process_limit=SUPPORTED.
+#
+# cgroups / systemd-run are detected but NOT required; we do not implement
+# Linux cgroups enforcement yet (see task rules).
+
+on:
+  push:
+    branches:
+      - main
+      - feat/tool-layer
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y bubblewrap
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      # Guard: fail fast if bwrap is absent after explicit installation above
+      - name: Verify bwrap is available
+        run: |
+          which bwrap || (echo "ERROR: bwrap not found after installation" && exit 1)
+          bwrap --version
+
+      # Detect systemd cgroup support without requiring it.
+      # We document whether it is available for future cgroups work.
+      - name: Detect systemd-run cgroup availability (informational only)
+        run: |
+          if systemd-run --user --scope --quiet --no-ask-password -p MemoryMax=1M true 2>/dev/null; then
+            echo "SYSTEMD_CGROUPS_AVAILABLE=true" >> "$GITHUB_ENV"
+            echo "INFO: systemd cgroups are available on this runner (not yet enforced)."
+          else
+            echo "SYSTEMD_CGROUPS_AVAILABLE=false" >> "$GITHUB_ENV"
+            echo "INFO: systemd cgroups are NOT available. Linux cgroup limits are not yet implemented."
+          fi
+
+      # Documented capability summary printed for CI log readability
+      - name: Print sandbox capabilities
+        run: |
+          python -c "
+          from velix_agent.sandbox.manager import SandboxManager
+          caps = SandboxManager().get_capabilities()
+          print('filesystem_isolation :', caps.filesystem_isolation)
+          print('network_isolation    :', caps.network_isolation)
+          print('timeout              :', caps.timeout)
+          print('output_limit         :', caps.output_limit)
+          print('secret_filtering     :', caps.secret_filtering)
+          print('memory_limit         :', caps.memory_limit)
+          print('process_limit        :', caps.process_limit)
+          print('disk_limit           :', caps.disk_limit)
+          "
+
+      - name: Run Linux backend unit tests
+        run: |
+          python -m pytest tests/unit/test_sandbox_linux.py -v --tb=short
+
+      - name: Run cross-platform sandbox tests
+        run: |
+          python -m pytest tests/unit/test_sandbox_cross_platform.py -v --tb=short
+
+      - name: Run sandbox security tests (Linux)
+        run: |
+          python -m pytest tests/sandbox/test_sandbox_security.py -v --tb=short
+
+      - name: Run sandbox secrets integration tests
+        run: |
+          python -m pytest tests/sandbox/test_sandbox_secrets_integration.py -v --tb=short
+
+      - name: Run bounded sandbox stress tests
+        run: |
+          python -m pytest tests/sandbox/test_sandbox_stress.py -v --tb=short
+
+      - name: Run Ruff
+        run: |
+          ruff check tests/sandbox/
+
+      - name: Run Mypy
+        run: |
+          mypy src/velix_agent/sandbox/

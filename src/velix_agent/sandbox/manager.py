@@ -87,6 +87,32 @@ class SandboxManager:
                     f"Capability '{cap_name}' is required in {policy.mode.name} "
                     f"mode but is {status}."
                 )
+            if status == "PARTIALLY_SUPPORTED" and policy.mode.name == "STRICT":
+                raise SandboxError(
+                    f"Capability '{cap_name}' is required in STRICT "
+                    f"mode but is only PARTIALLY_SUPPORTED."
+                )
+
+        if policy.mode.name != "STRICT":
+            # Warn on any requested capability that is only partially supported
+            requested_caps = ["timeout", "output_limit"]
+            if not policy.allow_network:
+                requested_caps.append("network_isolation")
+            if policy.cpu_limit:
+                requested_caps.append("cpu_limit")
+            if policy.memory_limit is not None:
+                requested_caps.append("memory_limit")
+            if policy.process_limit is not None:
+                requested_caps.append("process_limit")
+            if policy.secret_filtering:
+                requested_caps.append("secret_filtering")
+
+            for cap_name in requested_caps:
+                if getattr(caps, cap_name) == "PARTIALLY_SUPPORTED":
+                    from velix_agent.core.logging import get_logger
+                    get_logger("sandbox.manager").warning(
+                        f"Capability '{cap_name}' is only PARTIALLY_SUPPORTED."
+                    )
 
     def execute(
         self,
@@ -96,6 +122,8 @@ class SandboxManager:
         allow_network: bool = False,
         mode: str = "STRICT",
         secrets: dict[str, str] | None = None,
+        memory_limit: int | None = None,
+        process_limit: int | None = None,
     ) -> SandboxResult:
         if self.backend is None:
             raise SandboxError(f"Sandbox backend unavailable for platform: {platform.system()}")
@@ -113,6 +141,8 @@ class SandboxManager:
             mode=policy_mode,
             allow_network=allow_network,
             secrets=list(secrets.keys()) if secrets else [],
+            memory_limit=memory_limit,
+            process_limit=process_limit,
         )
 
         self._validate_capabilities(policy)

@@ -104,8 +104,8 @@ class WindowsSandboxBackend(SandboxBackend):
     @classmethod
     def get_capabilities(cls) -> SandboxCapabilities:
         return SandboxCapabilities(
-            filesystem_isolation="UNSUPPORTED",
-            network_isolation="UNSUPPORTED",
+            filesystem_isolation="UNSUPPORTED",  # Requires AppContainer
+            network_isolation="UNSUPPORTED",     # Requires AppContainer
             cpu_limit="UNSUPPORTED",  # CPU rate control is complex, relying on timeout
             memory_limit="SUPPORTED",
             process_limit="SUPPORTED",
@@ -116,6 +116,29 @@ class WindowsSandboxBackend(SandboxBackend):
             runtime_isolation="UNSUPPORTED",
             observability="UNSUPPORTED",
             security_hardening="UNSUPPORTED",
+        )
+
+    def _setup_appcontainer(self) -> None:
+        """
+        Phase 3: Windows AppContainer Isolation (Limitation Documented)
+
+        Implementing AppContainer isolation requires complex interaction with Win32 APIs
+        that cannot be safely implemented or verified via raw ctypes without a native
+        Windows host.
+
+        Required APIs for SETUP -> RECORD -> GRANT -> TEARDOWN:
+        - userenv.dll: CreateAppContainerProfile, DeleteAppContainerProfile,
+          DeriveAppContainerSidFromAppContainerName
+        - advapi32.dll: GetNamedSecurityInfoW, SetNamedSecurityInfoW, SetEntriesInAclW
+        - Complex structs: EXPLICIT_ACCESS_W, PACL, PSECURITY_DESCRIPTOR, SID
+
+        Faking success here with untested ctypes structs for ACL manipulation would risk
+        corrupting file permissions (recording/restoring ACLs incorrectly) on actual
+        Windows machines. Therefore, this limitation is documented instead of faked.
+        """
+        raise NotImplementedError(
+            "AppContainer filesystem/network isolation cannot be safely implemented "
+            "and verified via ctypes without a native Windows environment."
         )
 
     @staticmethod

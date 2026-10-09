@@ -19,14 +19,64 @@ logger = get_logger("sandbox.linux")
 class LinuxSandboxBackend(SandboxBackend):
     MAX_OUTPUT_BYTES = 50_000
 
+    _systemd_supported_cache: typing.ClassVar[bool | None] = None
+
+    @classmethod
+    def _detect_systemd(cls) -> bool:
+        if cls._systemd_supported_cache is None:
+            if not shutil.which("systemd-run"):
+                cls._systemd_supported_cache = False
+            else:
+                try:
+                    res = subprocess.run(
+                        [
+                            "systemd-run",
+                            "--user",
+                            "--scope",
+                            "-q",
+                            "--property=MemoryMax=100M",
+                            "--property=TasksMax=10",
+                            "true",
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    cls._systemd_supported_cache = (res.returncode == 0)
+                except Exception:
+                    cls._systemd_supported_cache = False
+        return bool(cls._systemd_supported_cache)
+
     @classmethod
     def get_capabilities(cls) -> SandboxCapabilities:
+        has_bwrap = bool(shutil.which("bwrap"))
+        if not has_bwrap:
+            return SandboxCapabilities(
+                filesystem_isolation="NOT_AVAILABLE",
+                network_isolation="NOT_AVAILABLE",
+                cpu_limit="NOT_AVAILABLE",
+                memory_limit="NOT_AVAILABLE",
+                process_limit="NOT_AVAILABLE",
+                timeout="SUPPORTED",
+                output_limit="SUPPORTED",
+                secret_filtering="SUPPORTED",
+                disk_limit="UNSUPPORTED",
+                runtime_isolation="UNSUPPORTED",
+                observability="UNSUPPORTED",
+                security_hardening="UNSUPPORTED",
+            )
+
+        has_cgroups = cls._detect_systemd()
+        from velix_agent.sandbox.policy import SupportStatus
+        limit_status: SupportStatus = (
+            "SUPPORTED" if has_cgroups else "PARTIALLY_SUPPORTED"
+        )
+
         return SandboxCapabilities(
             filesystem_isolation="SUPPORTED",
             network_isolation="SUPPORTED",
-            cpu_limit="SUPPORTED",
-            memory_limit="SUPPORTED",
-            process_limit="SUPPORTED",
+            cpu_limit="PARTIALLY_SUPPORTED",  # Enforced via per-process setrlimit
+            memory_limit=limit_status,
+            process_limit=limit_status,
             timeout="SUPPORTED",
             output_limit="SUPPORTED",
             secret_filtering="SUPPORTED",
@@ -115,6 +165,26 @@ class LinuxSandboxBackend(SandboxBackend):
             bwrap_cmd.append("--unshare-net")
 
         bwrap_cmd.extend(["--", *command])
+
+        has_cgroups = self._detect_systemd()
+        scope_name = None
+        if has_cgroups and (policy.memory_limit or policy.process_limit):
+            import uuid
+            scope_name = f"velix-sandbox-{uuid.uuid4().hex}.scope"
+            systemd_cmd = [
+                "systemd-run",
+                "--user",
+                "--scope",
+                "-q",
+                f"--unit={scope_name}",
+                "--property=CollectMode=inactive-or-failed",
+            ]
+            if policy.memory_limit:
+                systemd_cmd.append(f"--property=MemoryMax={policy.memory_limit}")
+            if policy.process_limit:
+                systemd_cmd.append(f"--property=TasksMax={policy.process_limit}")
+
+            bwrap_cmd = systemd_cmd + bwrap_cmd
 
         def set_limits() -> None:
             # Enforce CPU limit
@@ -218,3 +288,16 @@ class LinuxSandboxBackend(SandboxBackend):
             )
         except Exception as e:
             raise SandboxError(f"Failed to execute sandboxed command: {e}") from e
+        finally:
+            if scope_name:
+                with contextlib.suppress(Exception):
+                    subprocess.run(
+                        ["systemctl", "--user", "kill", "--kill-who=all", scope_name],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    subprocess.run(
+                        ["systemctl", "--user", "stop", scope_name],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )

@@ -47,6 +47,7 @@ packages = ["src/velix_agent"]
 dev = [
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
+    "pytest-timeout>=2.3.0",
     "ruff>=0.6.0",
     "mypy>=1.11.0",
 ]
