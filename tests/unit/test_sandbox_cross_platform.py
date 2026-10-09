@@ -48,9 +48,11 @@ def test_sandbox_cross_platform_timeout(tmp_path: Path) -> None:
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
 
-    # Use sys.executable to sleep
+    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+
+    # Use _test_python to sleep
     result = manager.execute(
-        [sys.executable, "-c", "import time; time.sleep(5)"],
+        [_test_python, "-c", "import time; time.sleep(5)"],
         tmp_path,
         timeout=1,
         allow_network=allow_net,
@@ -69,9 +71,11 @@ def test_sandbox_cross_platform_workspace_restriction(tmp_path: Path) -> None:
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
 
+    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+
     code = "import os\nprint(os.getcwd())\n"
     result = manager.execute(
-        [sys.executable, "-c", code], tmp_path, allow_network=allow_net, mode="BALANCED"
+        [_test_python, "-c", code], tmp_path, allow_network=allow_net, mode="BALANCED"
     )
 
     assert result.exit_code == 0
@@ -91,7 +95,10 @@ def test_sandbox_network_isolation_enforcement(tmp_path: Path) -> None:
         # Must fail if we demand network isolation (allow_network=False)
         with pytest.raises(
             SandboxError,
-            match=r"Capability '.*' is required in STRICT mode but is (UNSUPPORTED|PARTIALLY_SUPPORTED)"
+            match=(
+                r"Capability '.*' is required in STRICT mode but is "
+                r"(UNSUPPORTED|PARTIALLY_SUPPORTED)"
+            )
         ):
             manager.execute(["echo", "hello"], tmp_path, allow_network=False)
 
