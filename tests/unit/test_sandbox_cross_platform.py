@@ -33,7 +33,9 @@ def test_sandbox_capabilities() -> None:
 def test_sandbox_cross_platform_basic_execution(tmp_path: Path) -> None:
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
-    result = manager.execute(["echo", "hello sandbox"], tmp_path, allow_network=allow_net)
+    result = manager.execute(
+        ["echo", "hello sandbox"], tmp_path, allow_network=allow_net, mode="BALANCED"
+    )
 
     assert result.exit_code == 0
     assert "hello sandbox" in result.stdout
@@ -52,6 +54,7 @@ def test_sandbox_cross_platform_timeout(tmp_path: Path) -> None:
         tmp_path,
         timeout=1,
         allow_network=allow_net,
+        mode="BALANCED",
     )
 
     assert result.exit_code == -1
@@ -67,7 +70,9 @@ def test_sandbox_cross_platform_workspace_restriction(tmp_path: Path) -> None:
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
 
     code = "import os\nprint(os.getcwd())\n"
-    result = manager.execute([sys.executable, "-c", code], tmp_path, allow_network=allow_net)
+    result = manager.execute(
+        [sys.executable, "-c", code], tmp_path, allow_network=allow_net, mode="BALANCED"
+    )
 
     assert result.exit_code == 0
     # On macOS, tmp_path might be resolved to /private/var/..., check if samefile
@@ -85,7 +90,8 @@ def test_sandbox_network_isolation_enforcement(tmp_path: Path) -> None:
     if caps.network_isolation == "UNSUPPORTED":
         # Must fail if we demand network isolation (allow_network=False)
         with pytest.raises(
-            SandboxError, match="Network isolation is unsupported by the active backend"
+            SandboxError,
+            match=r"Capability '.*' is required in STRICT mode but is (UNSUPPORTED|PARTIALLY_SUPPORTED)"
         ):
             manager.execute(["echo", "hello"], tmp_path, allow_network=False)
 

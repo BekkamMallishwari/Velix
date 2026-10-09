@@ -1,5 +1,6 @@
 import os
 import platform
+import sys
 import typing
 from pathlib import Path
 
@@ -31,14 +32,16 @@ def policy(workspace_root: Path) -> SandboxPolicy:
 
 
 def test_sandbox_normal_python(macos_backend: MacOSSandboxBackend, policy: SandboxPolicy) -> None:
-    result = macos_backend.execute([".venv/bin/python", "-c", "print('hello')"], policy)
+    result = macos_backend.execute([sys.executable, "-c", "print('hello')"], policy)
     assert result.exit_code == 0
     assert "hello" in result.stdout
 
 
 def test_sandbox_pytest_venv(macos_backend: MacOSSandboxBackend, policy: SandboxPolicy) -> None:
     # Run a very simple, fast test so it doesn't take forever
-    result = macos_backend.execute([".venv/bin/pytest", "tests/unit/test_config.py", "-v"], policy)
+    result = macos_backend.execute(
+        [sys.executable, "-m", "pytest", "tests/unit/test_config.py", "-v"], policy
+    )
     assert result.exit_code == 0
 
 
