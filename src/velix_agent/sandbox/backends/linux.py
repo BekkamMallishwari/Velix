@@ -20,6 +20,7 @@ class LinuxSandboxBackend(SandboxBackend):
     MAX_OUTPUT_BYTES = 50_000
 
     _systemd_supported_cache: typing.ClassVar[bool | None] = None
+    _unshare_net_supported_cache: typing.ClassVar[bool | None] = None
 
     @classmethod
     def _detect_systemd(cls) -> bool:
@@ -47,6 +48,24 @@ class LinuxSandboxBackend(SandboxBackend):
         return bool(cls._systemd_supported_cache)
 
     @classmethod
+    def _detect_unshare_net(cls) -> bool:
+        if cls._unshare_net_supported_cache is None:
+            if not shutil.which("bwrap"):
+                cls._unshare_net_supported_cache = False
+            else:
+                try:
+                    res = subprocess.run(
+                        ["bwrap", "--unshare-net", "--", "true"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=2,
+                    )
+                    cls._unshare_net_supported_cache = (res.returncode == 0)
+                except Exception:
+                    cls._unshare_net_supported_cache = False
+        return bool(cls._unshare_net_supported_cache)
+
+    @classmethod
     def get_capabilities(cls) -> SandboxCapabilities:
         has_bwrap = bool(shutil.which("bwrap"))
         if not has_bwrap:
@@ -70,10 +89,13 @@ class LinuxSandboxBackend(SandboxBackend):
         limit_status: SupportStatus = (
             "SUPPORTED" if has_cgroups else "PARTIALLY_SUPPORTED"
         )
+        net_status: SupportStatus = (
+            "SUPPORTED" if cls._detect_unshare_net() else "UNSUPPORTED"
+        )
 
         return SandboxCapabilities(
             filesystem_isolation="SUPPORTED",
-            network_isolation="SUPPORTED",
+            network_isolation=net_status,
             cpu_limit="PARTIALLY_SUPPORTED",  # Enforced via per-process setrlimit
             memory_limit=limit_status,
             process_limit=limit_status,

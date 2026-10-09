@@ -14,8 +14,10 @@ from velix_agent.sandbox.result import SandboxError
 @pytest.fixture
 def clean_systemd_cache() -> typing.Generator[None, None, None]:
     LinuxSandboxBackend._systemd_supported_cache = None
+    LinuxSandboxBackend._unshare_net_supported_cache = None
     yield
     LinuxSandboxBackend._systemd_supported_cache = None
+    LinuxSandboxBackend._unshare_net_supported_cache = None
 
 
 def test_linux_capabilities_no_bwrap(clean_systemd_cache: typing.Any) -> None:
@@ -30,9 +32,12 @@ def test_linux_capabilities_no_systemd(clean_systemd_cache: typing.Any) -> None:
     def mock_which(cmd: str) -> str | None:
         return "/usr/bin/bwrap" if cmd == "bwrap" else None
 
-    with patch("shutil.which", side_effect=mock_which):
+    with patch("shutil.which", side_effect=mock_which), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
         caps = LinuxSandboxBackend.get_capabilities()
         assert caps.filesystem_isolation == "SUPPORTED"
+        assert caps.network_isolation == "SUPPORTED"
         assert caps.memory_limit == "PARTIALLY_SUPPORTED"
         assert caps.process_limit == "PARTIALLY_SUPPORTED"
         assert caps.cpu_limit == "PARTIALLY_SUPPORTED"
@@ -59,7 +64,9 @@ def test_manager_strict_mode_rejects_partial(
         return "/usr/bin/bwrap" if cmd == "bwrap" else None
 
     with patch("shutil.which", side_effect=mock_which), \
+         patch("subprocess.run") as mock_run, \
          patch("platform.system", return_value="Linux"):
+        mock_run.return_value = MagicMock(returncode=0)
         manager = SandboxManager()
         with pytest.raises(SandboxError, match="PARTIALLY_SUPPORTED"):
             manager.execute(
@@ -77,10 +84,12 @@ def test_manager_balanced_mode_accepts_partial(
         return "/usr/bin/bwrap" if cmd == "bwrap" else None
 
     with patch("shutil.which", side_effect=mock_which), \
+         patch("subprocess.run") as mock_run, \
          patch("platform.system", return_value="Linux"), \
          patch("velix_agent.sandbox.backends.linux.LinuxSandboxBackend.execute") as mock_exec, \
          patch("velix_agent.core.logging.get_logger") as mock_logger:
 
+        mock_run.return_value = MagicMock(returncode=0)
         mock_exec.return_value = MagicMock(stdout="", stderr="", exit_code=0, command=[])
 
         manager = SandboxManager()
@@ -97,6 +106,13 @@ def test_manager_balanced_mode_accepts_partial(
 @pytest.mark.skipif(platform.system() != "Linux", reason="Linux-specific actual execution")
 def test_linux_backend_execution(tmp_path: Path) -> None:
     backend = LinuxSandboxBackend()
+    caps = backend.get_capabilities()
+    if caps.network_isolation != "SUPPORTED":
+        pytest.skip(
+            "Environment does not permit unprivileged network namespaces "
+            "(bwrap --unshare-net)"
+        )
+
     policy = SandboxPolicy(workspace_root=tmp_path, allow_network=False)
 
     try:
