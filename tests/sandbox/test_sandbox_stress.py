@@ -163,10 +163,7 @@ def test_stress_bounded_memory_allocation(
     # Allocate 100 MiB with a limit of 50 MiB
     limit_bytes = 50 * 1024 * 1024
     alloc_bytes = 100 * 1024 * 1024
-    code = (
-        f"data = bytearray({alloc_bytes})\n"
-        "print('allocated')\n"
-    )
+    code = f"data = bytearray({alloc_bytes})\nprint('allocated')\n"
 
     t0 = time.monotonic()
     result = manager.execute(
@@ -249,9 +246,7 @@ def test_stress_large_stdout_is_truncated(
     suite even when the sandbox produces far more bytes than the limit.
     """
     if not _has_output_limit(caps):
-        pytest.skip(
-            f"output_limit={getattr(caps, 'output_limit', 'N/A')} on {_SYSTEM}"
-        )
+        pytest.skip(f"output_limit={getattr(caps, 'output_limit', 'N/A')} on {_SYSTEM}")
 
     code = "print('x' * 500_000)"
 
@@ -277,9 +272,7 @@ def test_stress_large_stderr_is_truncated(
 ) -> None:
     """Producing 500 KiB of stderr must be truncated without hanging."""
     if not _has_output_limit(caps):
-        pytest.skip(
-            f"output_limit={getattr(caps, 'output_limit', 'N/A')} on {_SYSTEM}"
-        )
+        pytest.skip(f"output_limit={getattr(caps, 'output_limit', 'N/A')} on {_SYSTEM}")
 
     code = "import sys; sys.stderr.write('y' * 500_000)"
 
@@ -314,9 +307,7 @@ def test_stress_runaway_child_cleanup_speed(
     Only applicable on POSIX where killpg is available.
     """
     if not _has_timeout(caps):
-        pytest.skip(
-            f"timeout={getattr(caps, 'timeout', 'N/A')} on {_SYSTEM}"
-        )
+        pytest.skip(f"timeout={getattr(caps, 'timeout', 'N/A')} on {_SYSTEM}")
     if _SYSTEM not in ("Darwin", "Linux"):
         pytest.skip("Runaway child reaping via killpg is POSIX-only")
 

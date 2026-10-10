@@ -32,7 +32,9 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -116,7 +118,9 @@ def test_sandbox_read_workspace(manager: SandboxManager, workspace: Path, caps: 
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}; "
             "workspace boundary tests require SUPPORTED filesystem isolation"
         )
-    result = manager.execute(["cat", "test.txt"], workspace_root=workspace, mode="BALANCED", allow_network=True)
+    result = manager.execute(
+        ["cat", "test.txt"], workspace_root=workspace, cpu_limit=False, allow_network=True
+    )
     assert result.exit_code == 0
     assert "hello" in result.stdout
 
@@ -128,7 +132,7 @@ def test_sandbox_write_workspace(manager: SandboxManager, workspace: Path, caps:
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
         )
     result = manager.execute(
-        ["touch", "new_file.txt"], workspace_root=workspace, mode="BALANCED", allow_network=True
+        ["touch", "new_file.txt"], workspace_root=workspace, cpu_limit=False, allow_network=True
     )
     assert result.exit_code == 0
     assert (workspace / "new_file.txt").exists()
@@ -143,14 +147,27 @@ def test_sandbox_write_outside_workspace_blocked(
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}; "
             "write-outside-workspace test requires SUPPORTED filesystem isolation"
         )
-    outside = tmp_path / "outside.txt"
-    result = manager.execute(
-        ["touch", outside.as_posix()], workspace_root=workspace, mode="BALANCED", allow_network=True
-    )
-    assert result.exit_code != 0, (
-        "Sandbox allowed write to path outside workspace — this is a security violation"
-    )
-    assert not outside.exists()
+    # Create a safe, unique test directory outside the workspace and outside /tmp
+    # so we don't rely on bwrap's private /tmp tmpfs masking.
+    local_escape_dir = Path(tempfile.mkdtemp(dir=Path.cwd()))
+    outside = local_escape_dir / "outside.txt"
+    try:
+        assert not local_escape_dir.is_relative_to(workspace), (
+            "Escape dir must be outside workspace"
+        )
+        result = manager.execute(
+            ["touch", outside.as_posix()],
+            workspace_root=workspace,
+            cpu_limit=False,
+            allow_network=True,
+        )
+        assert result.exit_code != 0, (
+            "Sandbox allowed write to path outside workspace — this is a security violation"
+        )
+        assert not outside.exists()
+    finally:
+        if local_escape_dir.exists():
+            shutil.rmtree(local_escape_dir)
 
 
 def test_sandbox_read_outside_workspace_blocked(
@@ -164,33 +181,33 @@ def test_sandbox_read_outside_workspace_blocked(
     outside = tmp_path / "outside_read.txt"
     outside.write_text("secret")
     result = manager.execute(
-        ["cat", outside.as_posix()], workspace_root=workspace, mode="BALANCED", allow_network=True
+        ["cat", outside.as_posix()], workspace_root=workspace, cpu_limit=False, allow_network=True
     )
     assert result.exit_code != 0
     assert "secret" not in result.stdout
 
 
-def test_sandbox_read_etc_passwd(
-    manager: SandboxManager, workspace: Path, caps: object
-) -> None:
+def test_sandbox_read_etc_passwd(manager: SandboxManager, workspace: Path, caps: object) -> None:
     """Sandboxed process must NOT read /etc/passwd."""
     if not _needs_fs_isolation(caps):
         pytest.skip(
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
         )
-    result = manager.execute(["cat", "/etc/passwd"], workspace_root=workspace, mode="BALANCED", allow_network=True)
+    result = manager.execute(
+        ["cat", "/etc/passwd"], workspace_root=workspace, cpu_limit=False, allow_network=True
+    )
     assert result.exit_code != 0
 
 
-def test_sandbox_read_etc_hosts(
-    manager: SandboxManager, workspace: Path, caps: object
-) -> None:
+def test_sandbox_read_etc_hosts(manager: SandboxManager, workspace: Path, caps: object) -> None:
     """Sandboxed process must NOT read /etc/hosts."""
     if not _needs_fs_isolation(caps):
         pytest.skip(
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
         )
-    result = manager.execute(["cat", "/etc/hosts"], workspace_root=workspace, mode="BALANCED", allow_network=True)
+    result = manager.execute(
+        ["cat", "/etc/hosts"], workspace_root=workspace, cpu_limit=False, allow_network=True
+    )
     assert result.exit_code != 0
 
 
@@ -210,7 +227,10 @@ def test_sandbox_write_git_dir_blocked(
         )
     git_file = workspace / ".git" / "config"
     result = manager.execute(
-        ["touch", git_file.as_posix()], workspace_root=workspace, mode="BALANCED", allow_network=True
+        ["touch", git_file.as_posix()],
+        workspace_root=workspace,
+        cpu_limit=False,
+        allow_network=True,
     )
     assert result.exit_code != 0, (
         "Sandbox allowed write to .git directory — this is a security violation"
@@ -231,7 +251,7 @@ def test_sandbox_read_git_dir_blocked(
     git_file.write_text("dummy git config")
 
     result = manager.execute(
-        ["cat", git_file.as_posix()], workspace_root=workspace, mode="BALANCED", allow_network=True
+        ["cat", git_file.as_posix()], workspace_root=workspace, cpu_limit=False, allow_network=True
     )
     assert result.exit_code != 0
 
@@ -241,9 +261,7 @@ def test_sandbox_read_git_dir_blocked(
 # ---------------------------------------------------------------------------
 
 
-def test_sandbox_read_ssh_blocked(
-    manager: SandboxManager, workspace: Path, caps: object
-) -> None:
+def test_sandbox_read_ssh_blocked(manager: SandboxManager, workspace: Path, caps: object) -> None:
     """Sandboxed process must NOT read ~/.ssh credentials."""
     if not _needs_fs_isolation(caps):
         pytest.skip(
@@ -256,7 +274,10 @@ def test_sandbox_read_ssh_blocked(
     dummy_key.write_text("secret")
     try:
         result = manager.execute(
-            ["cat", dummy_key.as_posix()], workspace_root=workspace, mode="BALANCED", allow_network=True
+            ["cat", dummy_key.as_posix()],
+            workspace_root=workspace,
+            cpu_limit=False,
+            allow_network=True,
         )
         assert result.exit_code != 0
     finally:
@@ -278,7 +299,10 @@ def test_sandbox_read_aws_credentials_blocked(
     dummy_creds.write_text("secret")
     try:
         result = manager.execute(
-            ["cat", dummy_creds.as_posix()], workspace_root=workspace, mode="BALANCED", allow_network=True
+            ["cat", dummy_creds.as_posix()],
+            workspace_root=workspace,
+            cpu_limit=False,
+            allow_network=True,
         )
         assert result.exit_code != 0
     finally:
@@ -306,7 +330,10 @@ def test_sandbox_read_various_credentials_blocked(
     target.write_text("secret")
     try:
         result = manager.execute(
-            ["cat", target.as_posix()], workspace_root=workspace, mode="BALANCED", allow_network=True
+            ["cat", target.as_posix()],
+            workspace_root=workspace,
+            cpu_limit=False,
+            allow_network=True,
         )
         assert result.exit_code != 0
     finally:
@@ -328,7 +355,10 @@ def test_sandbox_read_config_dir_blocked(
     dummy_file.write_text("secret")
     try:
         result = manager.execute(
-            ["cat", dummy_file.as_posix()], workspace_root=workspace, mode="BALANCED", allow_network=True
+            ["cat", dummy_file.as_posix()],
+            workspace_root=workspace,
+            cpu_limit=False,
+            allow_network=True,
         )
         assert result.exit_code != 0
     finally:
@@ -354,7 +384,10 @@ def test_sandbox_symlink_escape_blocked(
     os.symlink(str(outside_file), str(symlink_file))
     try:
         result = manager.execute(
-            ["cat", symlink_file.as_posix()], workspace_root=workspace, mode="BALANCED", allow_network=True
+            ["cat", symlink_file.as_posix()],
+            workspace_root=workspace,
+            cpu_limit=False,
+            allow_network=True,
         )
         assert result.exit_code != 0
     finally:
@@ -378,7 +411,8 @@ def test_sandbox_network_outbound_denied(
         )
     result = manager.execute(
         ["curl", "--connect-timeout", "2", "https://example.com"],
-        workspace_root=workspace, mode="BALANCED",
+        workspace_root=workspace,
+        mode="BALANCED",
     )
     assert result.exit_code != 0
 
@@ -388,9 +422,7 @@ def test_sandbox_network_denial_localhost(
 ) -> None:
     """Localhost ping must be denied when network_isolation is SUPPORTED."""
     if not _needs_net_isolation(caps):
-        pytest.skip(
-            f"network_isolation={getattr(caps, 'network_isolation', 'N/A')} on {_SYSTEM}"
-        )
+        pytest.skip(f"network_isolation={getattr(caps, 'network_isolation', 'N/A')} on {_SYSTEM}")
     args = ["-c", "1"]
     if _SYSTEM == "Darwin":
         args += ["-t", "1"]  # macOS ping uses -t for timeout
@@ -398,7 +430,8 @@ def test_sandbox_network_denial_localhost(
         args += ["-W", "1"]  # Linux ping uses -W for timeout
     result = manager.execute(
         ["ping", *args, "127.0.0.1"],
-        workspace_root=workspace, mode="BALANCED",
+        workspace_root=workspace,
+        mode="BALANCED",
         timeout=5,
     )
     assert result.exit_code != 0
@@ -409,18 +442,14 @@ def test_sandbox_network_denial_localhost(
 # ---------------------------------------------------------------------------
 
 
-def test_sandbox_environment_clean(
-    manager: SandboxManager, workspace: Path, caps: object
-) -> None:
+def test_sandbox_environment_clean(manager: SandboxManager, workspace: Path, caps: object) -> None:
     """Host environment variables must not leak into the sandbox.
 
     NOTE: This relies on secret_filtering being SUPPORTED (env is filtered),
     not on filesystem_isolation. We check the capability explicitly.
     """
     if getattr(caps, "secret_filtering", "NOT_AVAILABLE") != "SUPPORTED":
-        pytest.skip(
-            f"secret_filtering={getattr(caps, 'secret_filtering', 'N/A')} on {_SYSTEM}"
-        )
+        pytest.skip(f"secret_filtering={getattr(caps, 'secret_filtering', 'N/A')} on {_SYSTEM}")
     if not _needs_fs_isolation(caps):
         pytest.skip(
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
@@ -441,9 +470,7 @@ def test_sandbox_environment_clean(
 # ---------------------------------------------------------------------------
 
 
-def test_sandbox_command_timeout(
-    manager: SandboxManager, workspace: Path, caps: object
-) -> None:
+def test_sandbox_command_timeout(manager: SandboxManager, workspace: Path, caps: object) -> None:
     """A command exceeding the timeout must be killed with exit_code -1.
 
     Note: We use `time.sleep` here specifically to avoid CPU exhaustion (RLIMIT_CPU),
@@ -451,16 +478,15 @@ def test_sandbox_command_timeout(
     For CPU-bound timeout limits, see the stress test suite.
     """
     if not _needs_timeout(caps):
-        pytest.skip(
-            f"timeout={getattr(caps, 'timeout', 'N/A')} on {_SYSTEM}"
-        )
+        pytest.skip(f"timeout={getattr(caps, 'timeout', 'N/A')} on {_SYSTEM}")
     if not _needs_fs_isolation(caps):
         pytest.skip(
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
         )
     result = manager.execute(
         [sys.executable, "-c", "import time; time.sleep(10)"],
-        workspace_root=workspace, mode="BALANCED",
+        workspace_root=workspace,
+        mode="BALANCED",
         timeout=2,
     )
     assert result.exit_code == -1, (
@@ -476,14 +502,10 @@ def test_sandbox_command_timeout(
 # ---------------------------------------------------------------------------
 
 
-def test_sandbox_stdout_limit(
-    manager: SandboxManager, workspace: Path, caps: object
-) -> None:
+def test_sandbox_stdout_limit(manager: SandboxManager, workspace: Path, caps: object) -> None:
     """stdout must be truncated when output exceeds the configured limit."""
     if not _needs_output_limit(caps):
-        pytest.skip(
-            f"output_limit={getattr(caps, 'output_limit', 'N/A')} on {_SYSTEM}"
-        )
+        pytest.skip(f"output_limit={getattr(caps, 'output_limit', 'N/A')} on {_SYSTEM}")
     if not _needs_fs_isolation(caps):
         pytest.skip(
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
@@ -493,19 +515,13 @@ def test_sandbox_stdout_limit(
     result = manager.execute(cmd, workspace_root=workspace, mode="BALANCED", allow_network=True)
     assert result.exit_code == 0
     assert len(result.stdout) < 60000, "stdout was not truncated"
-    assert "TRUNCATED" in result.stdout, (
-        "Expected [TRUNCATED:…] marker in truncated stdout"
-    )
+    assert "TRUNCATED" in result.stdout, "Expected [TRUNCATED:…] marker in truncated stdout"
 
 
-def test_sandbox_stderr_limit(
-    manager: SandboxManager, workspace: Path, caps: object
-) -> None:
+def test_sandbox_stderr_limit(manager: SandboxManager, workspace: Path, caps: object) -> None:
     """stderr must be truncated when output exceeds the configured limit."""
     if not _needs_output_limit(caps):
-        pytest.skip(
-            f"output_limit={getattr(caps, 'output_limit', 'N/A')} on {_SYSTEM}"
-        )
+        pytest.skip(f"output_limit={getattr(caps, 'output_limit', 'N/A')} on {_SYSTEM}")
     if not _needs_fs_isolation(caps):
         pytest.skip(
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
@@ -514,9 +530,7 @@ def test_sandbox_stderr_limit(
     result = manager.execute(cmd, workspace_root=workspace, mode="BALANCED", allow_network=True)
     assert result.exit_code == 0
     assert len(result.stderr) < 60000, "stderr was not truncated"
-    assert "TRUNCATED" in result.stderr, (
-        "Expected [TRUNCATED:…] marker in truncated stderr"
-    )
+    assert "TRUNCATED" in result.stderr, "Expected [TRUNCATED:…] marker in truncated stderr"
 
 
 # ---------------------------------------------------------------------------
@@ -589,3 +603,38 @@ def test_windows_filesystem_isolation_is_unsupported_not_silently_skipped() -> N
         "Windows backend must report network_isolation=UNSUPPORTED. "
         "Do not upgrade to SUPPORTED without implementing network isolation."
     )
+
+    with pytest.raises(
+        SandboxError,
+        match="Capability 'filesystem_isolation' is required in STRICT mode but is UNSUPPORTED",
+    ):
+        mgr.execute(["echo", "hi"], workspace_root=".")
+
+
+def test_sandbox_python_interpreter_mounted(
+    manager: SandboxManager, workspace: Path, caps: object
+) -> None:
+    # This tests the regression where bwrap failed to execute sys.executable
+    # because it was missing from the sandbox mounts. We expect exit_code == 0
+    # because we explicitly mount the interpreter and selected runtime paths
+    # (such as library directories and pyvenv.cfg when present).
+    if getattr(caps, "filesystem_isolation", "N/A") != "SUPPORTED":
+        pytest.skip("Requires filesystem isolation")
+
+    cmd = [sys.executable, "-c", "import sys; print(sys.executable)"]
+    result = manager.execute(cmd, workspace_root=workspace, mode="BALANCED", allow_network=True)
+    assert result.exit_code == 0, f"Failed to execute Python interpreter: {result.stderr}"
+
+
+def test_sandbox_cpu_limit_strict_rejection(
+    manager: SandboxManager, workspace: Path, caps: object
+) -> None:
+    """If cpu_limit is requested in STRICT mode but not SUPPORTED, it must be rejected."""
+    status = getattr(caps, "cpu_limit", "NOT_AVAILABLE")
+    if status == "SUPPORTED":
+        pytest.skip("cpu_limit is SUPPORTED on this platform, cannot test rejection")
+
+    with pytest.raises(
+        SandboxError, match="Capability 'cpu_limit' is required in STRICT mode but is"
+    ):
+        manager.execute(["echo", "hi"], workspace_root=workspace, cpu_limit=True)

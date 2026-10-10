@@ -5,8 +5,10 @@ import resource
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import typing
+from pathlib import Path
 
 from velix_agent.core.logging import get_logger
 from velix_agent.sandbox.backends.base import SandboxBackend
@@ -198,6 +200,35 @@ class LinuxSandboxBackend(SandboxBackend):
             workspace_path,
             workspace_path,
         ]
+
+        sys_prefix = Path(sys.prefix).resolve()
+        exec_file_resolved = Path(sys.executable).resolve()
+        exec_file_unresolved = Path(sys.executable)
+        workspace_resolved = Path(workspace_path).resolve()
+
+        # Mount only the specific runtime paths needed (executable and libraries),
+        # avoiding exposing the entire sys.prefix which could contain other binaries or secrets.
+        paths_to_mount = {exec_file_resolved, exec_file_unresolved}
+
+        # In a virtual environment, python relies on pyvenv.cfg at the prefix root.
+        pyvenv_cfg = sys_prefix / "pyvenv.cfg"
+        if pyvenv_cfg.exists():
+            paths_to_mount.add(pyvenv_cfg.resolve())
+
+        for lib_dir in ("lib", "lib64"):
+            lib_path = sys_prefix / lib_dir
+            if lib_path.exists():
+                paths_to_mount.add(lib_path.resolve())
+
+        for path_to_mount in paths_to_mount:
+            is_covered = False
+            for std_path in ("/usr", "/bin", "/sbin", "/lib", "/lib64"):
+                if path_to_mount.is_relative_to(Path(std_path).resolve()):
+                    is_covered = True
+                    break
+
+            if not is_covered and not path_to_mount.is_relative_to(workspace_resolved):
+                bwrap_cmd.extend(["--ro-bind", path_to_mount.as_posix(), path_to_mount.as_posix()])
 
         if not policy.allow_network:
             bwrap_cmd.append("--unshare-net")

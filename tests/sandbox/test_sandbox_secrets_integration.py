@@ -18,7 +18,7 @@ def test_host_environment_not_inherited(sandbox_manager: SandboxManager, tmp_pat
         # Depending on OS, 'env' or 'set' prints the environment
         import platform
 
-        cmd = ["set"] if platform.system() == "Windows" else ["env"]
+        cmd = ["cmd.exe", "/c", "set"] if platform.system() == "Windows" else ["env"]
 
         res = sandbox_manager.execute(
             command=cmd, workspace_root=tmp_path, mode="BALANCED", allow_network=True

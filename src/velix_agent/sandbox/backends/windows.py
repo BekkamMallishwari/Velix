@@ -105,7 +105,7 @@ class WindowsSandboxBackend(SandboxBackend):
     def get_capabilities(cls) -> SandboxCapabilities:
         return SandboxCapabilities(
             filesystem_isolation="UNSUPPORTED",  # Requires AppContainer
-            network_isolation="UNSUPPORTED",     # Requires AppContainer
+            network_isolation="UNSUPPORTED",  # Requires AppContainer
             cpu_limit="UNSUPPORTED",  # CPU rate control is complex, relying on timeout
             memory_limit="SUPPORTED",
             process_limit="SUPPORTED",

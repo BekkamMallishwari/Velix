@@ -110,6 +110,7 @@ class SandboxManager:
             for cap_name in requested_caps:
                 if getattr(caps, cap_name) == "PARTIALLY_SUPPORTED":
                     from velix_agent.core.logging import get_logger
+
                     get_logger("sandbox.manager").warning(
                         f"Capability '{cap_name}' is only PARTIALLY_SUPPORTED."
                     )
@@ -124,7 +125,21 @@ class SandboxManager:
         secrets: dict[str, str] | None = None,
         memory_limit: int | None = None,
         process_limit: int | None = None,
+        cpu_limit: bool = True,
     ) -> SandboxResult:
+        """Execute a command in the sandbox.
+
+        Args:
+            command: The command to execute.
+            workspace_root: The root directory for the sandbox workspace.
+            timeout: Maximum execution time in seconds.
+            allow_network: Whether to allow outbound network access.
+            mode: Sandbox policy mode ('STRICT', 'BALANCED', 'DEVELOPMENT').
+            secrets: Dictionary of secrets to inject and redact.
+            memory_limit: Maximum memory in bytes.
+            process_limit: Maximum number of processes.
+            cpu_limit: Whether to enforce CPU time limits (requires SUPPORTED in STRICT mode).
+        """
         if self.backend is None:
             raise SandboxError(f"Sandbox backend unavailable for platform: {platform.system()}")
 
@@ -143,6 +158,7 @@ class SandboxManager:
             secrets=list(secrets.keys()) if secrets else [],
             memory_limit=memory_limit,
             process_limit=process_limit,
+            cpu_limit=cpu_limit,
         )
 
         self._validate_capabilities(policy)
