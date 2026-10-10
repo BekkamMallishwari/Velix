@@ -116,7 +116,7 @@ def test_sandbox_read_workspace(manager: SandboxManager, workspace: Path, caps: 
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}; "
             "workspace boundary tests require SUPPORTED filesystem isolation"
         )
-    result = manager.execute(["cat", "test.txt"], workspace_root=workspace)
+    result = manager.execute(["cat", "test.txt"], workspace_root=workspace, allow_network=True)
     assert result.exit_code == 0
     assert "hello" in result.stdout
 
@@ -127,7 +127,9 @@ def test_sandbox_write_workspace(manager: SandboxManager, workspace: Path, caps:
         pytest.skip(
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
         )
-    result = manager.execute(["touch", "new_file.txt"], workspace_root=workspace)
+    result = manager.execute(
+        ["touch", "new_file.txt"], workspace_root=workspace, allow_network=True
+    )
     assert result.exit_code == 0
     assert (workspace / "new_file.txt").exists()
 
@@ -142,7 +144,9 @@ def test_sandbox_write_outside_workspace_blocked(
             "write-outside-workspace test requires SUPPORTED filesystem isolation"
         )
     outside = tmp_path / "outside.txt"
-    result = manager.execute(["touch", outside.as_posix()], workspace_root=workspace)
+    result = manager.execute(
+        ["touch", outside.as_posix()], workspace_root=workspace, allow_network=True
+    )
     assert result.exit_code != 0, (
         "Sandbox allowed write to path outside workspace — this is a security violation"
     )
@@ -159,7 +163,9 @@ def test_sandbox_read_outside_workspace_blocked(
         )
     outside = tmp_path / "outside_read.txt"
     outside.write_text("secret")
-    result = manager.execute(["cat", outside.as_posix()], workspace_root=workspace)
+    result = manager.execute(
+        ["cat", outside.as_posix()], workspace_root=workspace, allow_network=True
+    )
     assert result.exit_code != 0
     assert "secret" not in result.stdout
 
@@ -172,7 +178,7 @@ def test_sandbox_read_etc_passwd(
         pytest.skip(
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
         )
-    result = manager.execute(["cat", "/etc/passwd"], workspace_root=workspace)
+    result = manager.execute(["cat", "/etc/passwd"], workspace_root=workspace, allow_network=True)
     assert result.exit_code != 0
 
 
@@ -184,7 +190,7 @@ def test_sandbox_read_etc_hosts(
         pytest.skip(
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
         )
-    result = manager.execute(["cat", "/etc/hosts"], workspace_root=workspace)
+    result = manager.execute(["cat", "/etc/hosts"], workspace_root=workspace, allow_network=True)
     assert result.exit_code != 0
 
 
@@ -203,7 +209,9 @@ def test_sandbox_write_git_dir_blocked(
             ".git protection requires SUPPORTED filesystem isolation"
         )
     git_file = workspace / ".git" / "config"
-    result = manager.execute(["touch", git_file.as_posix()], workspace_root=workspace)
+    result = manager.execute(
+        ["touch", git_file.as_posix()], workspace_root=workspace, allow_network=True
+    )
     assert result.exit_code != 0, (
         "Sandbox allowed write to .git directory — this is a security violation"
     )
@@ -222,7 +230,9 @@ def test_sandbox_read_git_dir_blocked(
     git_file.parent.mkdir(parents=True, exist_ok=True)
     git_file.write_text("dummy git config")
 
-    result = manager.execute(["cat", git_file.as_posix()], workspace_root=workspace)
+    result = manager.execute(
+        ["cat", git_file.as_posix()], workspace_root=workspace, allow_network=True
+    )
     assert result.exit_code != 0
 
 
@@ -245,7 +255,9 @@ def test_sandbox_read_ssh_blocked(
     dummy_key = ssh_dir / "dummy_rsa"
     dummy_key.write_text("secret")
     try:
-        result = manager.execute(["cat", dummy_key.as_posix()], workspace_root=workspace)
+        result = manager.execute(
+            ["cat", dummy_key.as_posix()], workspace_root=workspace, allow_network=True
+        )
         assert result.exit_code != 0
     finally:
         dummy_key.unlink(missing_ok=True)
@@ -265,7 +277,9 @@ def test_sandbox_read_aws_credentials_blocked(
     dummy_creds = aws_dir / "credentials"
     dummy_creds.write_text("secret")
     try:
-        result = manager.execute(["cat", dummy_creds.as_posix()], workspace_root=workspace)
+        result = manager.execute(
+            ["cat", dummy_creds.as_posix()], workspace_root=workspace, allow_network=True
+        )
         assert result.exit_code != 0
     finally:
         dummy_creds.unlink(missing_ok=True)
@@ -291,7 +305,9 @@ def test_sandbox_read_various_credentials_blocked(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("secret")
     try:
-        result = manager.execute(["cat", target.as_posix()], workspace_root=workspace)
+        result = manager.execute(
+            ["cat", target.as_posix()], workspace_root=workspace, allow_network=True
+        )
         assert result.exit_code != 0
     finally:
         target.unlink(missing_ok=True)
@@ -311,7 +327,9 @@ def test_sandbox_read_config_dir_blocked(
     dummy_file = config_dir / "dummy_config.txt"
     dummy_file.write_text("secret")
     try:
-        result = manager.execute(["cat", dummy_file.as_posix()], workspace_root=workspace)
+        result = manager.execute(
+            ["cat", dummy_file.as_posix()], workspace_root=workspace, allow_network=True
+        )
         assert result.exit_code != 0
     finally:
         dummy_file.unlink(missing_ok=True)
@@ -335,7 +353,9 @@ def test_sandbox_symlink_escape_blocked(
     symlink_file = workspace / "escape_link"
     os.symlink(str(outside_file), str(symlink_file))
     try:
-        result = manager.execute(["cat", symlink_file.as_posix()], workspace_root=workspace)
+        result = manager.execute(
+            ["cat", symlink_file.as_posix()], workspace_root=workspace, allow_network=True
+        )
         assert result.exit_code != 0
     finally:
         symlink_file.unlink(missing_ok=True)
@@ -408,7 +428,7 @@ def test_sandbox_environment_clean(
     os.environ["AWS_ACCESS_KEY_ID"] = "secret123"
     try:
         cmd = [sys.executable, "-c", "import os; print(list(os.environ.keys()))"]
-        result = manager.execute(cmd, workspace_root=workspace)
+        result = manager.execute(cmd, workspace_root=workspace, allow_network=True)
         assert result.exit_code == 0
         assert "secret123" not in result.stdout
         assert "AWS_ACCESS_KEY_ID" not in result.stdout
@@ -470,7 +490,7 @@ def test_sandbox_stdout_limit(
         )
     # Produce 60 000 bytes of output — above the 50 000-byte limit
     cmd = [sys.executable, "-c", "print('x' * 60000)"]
-    result = manager.execute(cmd, workspace_root=workspace)
+    result = manager.execute(cmd, workspace_root=workspace, allow_network=True)
     assert result.exit_code == 0
     assert len(result.stdout) < 60000, "stdout was not truncated"
     assert "TRUNCATED" in result.stdout, (
@@ -491,7 +511,7 @@ def test_sandbox_stderr_limit(
             f"filesystem_isolation={getattr(caps, 'filesystem_isolation', 'N/A')} on {_SYSTEM}"
         )
     cmd = [sys.executable, "-c", "import sys; sys.stderr.write('x' * 60000)"]
-    result = manager.execute(cmd, workspace_root=workspace)
+    result = manager.execute(cmd, workspace_root=workspace, allow_network=True)
     assert result.exit_code == 0
     assert len(result.stderr) < 60000, "stderr was not truncated"
     assert "TRUNCATED" in result.stderr, (
@@ -532,7 +552,7 @@ def test_sandbox_child_process_cleanup(
     )
     cmd = [sys.executable, "-c", script]
 
-    manager.execute(cmd, workspace_root=workspace, timeout=2)
+    manager.execute(cmd, workspace_root=workspace, allow_network=True, timeout=2)
     # Brief pause to let the OS schedule cleanup
     time.sleep(0.5)
 

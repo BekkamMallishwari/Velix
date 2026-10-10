@@ -20,7 +20,9 @@ def test_host_environment_not_inherited(sandbox_manager: SandboxManager, tmp_pat
 
         cmd = ["set"] if platform.system() == "Windows" else ["env"]
 
-        res = sandbox_manager.execute(command=cmd, workspace_root=tmp_path)
+        res = sandbox_manager.execute(
+            command=cmd, workspace_root=tmp_path, mode="BALANCED", allow_network=True
+        )
 
         assert "SUPER_SECRET_HOST_KEY" not in res.stdout
         assert "host_secret_value" not in res.stdout
@@ -40,7 +42,11 @@ def test_secret_injection_and_redaction(sandbox_manager: SandboxManager, tmp_pat
         cmd = ["sh", "-c", "echo $INJECTED_SECRET"]
 
     res = sandbox_manager.execute(
-        command=cmd, workspace_root=tmp_path, secrets={"INJECTED_SECRET": secret_value}
+        command=cmd,
+        workspace_root=tmp_path,
+        secrets={"INJECTED_SECRET": secret_value},
+        mode="BALANCED",
+        allow_network=True,
     )
 
     # The output should NOT contain the secret value directly

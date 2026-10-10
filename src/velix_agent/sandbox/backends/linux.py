@@ -43,7 +43,7 @@ class LinuxSandboxBackend(SandboxBackend):
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
-                    cls._systemd_supported_cache = (res.returncode == 0)
+                    cls._systemd_supported_cache = res.returncode == 0
                 except Exception:
                     cls._systemd_supported_cache = False
         return bool(cls._systemd_supported_cache)
@@ -56,13 +56,13 @@ class LinuxSandboxBackend(SandboxBackend):
             else:
                 try:
                     res = subprocess.run(
-                        ["bwrap", "--unshare-net", "--", "true"],
+                        ["bwrap", "--unshare-net", "--bind", "/", "/", "--", "true"],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         timeout=2,
                     )
-                    cls._unshare_net_supported_cache = (res.returncode == 0)
-                except Exception:
+                    cls._unshare_net_supported_cache = res.returncode == 0
+                except (OSError, subprocess.TimeoutExpired):
                     cls._unshare_net_supported_cache = False
         return bool(cls._unshare_net_supported_cache)
 
@@ -79,7 +79,7 @@ class LinuxSandboxBackend(SandboxBackend):
                         stderr=subprocess.DEVNULL,
                         timeout=2,
                     )
-                    cls._bwrap_execution_supported_cache = (res.returncode == 0)
+                    cls._bwrap_execution_supported_cache = res.returncode == 0
                 except (OSError, subprocess.TimeoutExpired):
                     cls._bwrap_execution_supported_cache = False
         return bool(cls._bwrap_execution_supported_cache)
@@ -105,12 +105,9 @@ class LinuxSandboxBackend(SandboxBackend):
 
         has_cgroups = cls._detect_systemd()
         from velix_agent.sandbox.policy import SupportStatus
-        limit_status: SupportStatus = (
-            "SUPPORTED" if has_cgroups else "PARTIALLY_SUPPORTED"
-        )
-        net_status: SupportStatus = (
-            "SUPPORTED" if cls._detect_unshare_net() else "UNSUPPORTED"
-        )
+
+        limit_status: SupportStatus = "SUPPORTED" if has_cgroups else "PARTIALLY_SUPPORTED"
+        net_status: SupportStatus = "SUPPORTED" if cls._detect_unshare_net() else "UNSUPPORTED"
 
         return SandboxCapabilities(
             filesystem_isolation="SUPPORTED",
@@ -211,6 +208,7 @@ class LinuxSandboxBackend(SandboxBackend):
         scope_name = None
         if has_cgroups and (policy.memory_limit or policy.process_limit):
             import uuid
+
             scope_name = f"velix-sandbox-{uuid.uuid4().hex}.scope"
             systemd_cmd = [
                 "systemd-run",
