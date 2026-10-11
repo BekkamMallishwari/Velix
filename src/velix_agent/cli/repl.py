@@ -95,8 +95,17 @@ def start_repl(runtime: Runtime) -> None:
         # Not a slash command — treat as a coding task.
         logger.debug("Task received: %s", stripped)
         try:
-            response = runtime.agent.respond(stripped)
+            from rich.status import Status
+
+            with Status(
+                "🔍 Thinking…",
+                console=runtime.console,
+                spinner="dots",
+                spinner_style="cyan",
+            ):
+                response = runtime.agent.respond(stripped)
             print_agent_response(runtime.console, response)
         except Exception:
             print_error(runtime.console, "Failed to process task.")
             logger.exception("Unexpected error handling task")
+

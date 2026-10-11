@@ -1,7 +1,7 @@
 """Tests for CLI integration with AutonomousCodingLoop."""
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, ANY
 
 from typer.testing import CliRunner
 
@@ -19,7 +19,7 @@ def test_cli_one_shot_success(mock_run: MagicMock) -> None:
         result = runner.invoke(app, ["test_task"])
 
         assert result.exit_code == 0
-        mock_run.assert_called_once_with("test_task")
+        mock_run.assert_called_once_with("test_task", on_progress=ANY)
         mock_respond.assert_not_called()
         assert "Task completed successfully." in result.stdout
 
@@ -31,7 +31,7 @@ def test_cli_one_shot_failed(mock_run: MagicMock) -> None:
     result = runner.invoke(app, ["test_task"])
 
     assert result.exit_code == 1
-    mock_run.assert_called_once_with("test_task")
+    mock_run.assert_called_once_with("test_task", on_progress=ANY)
     assert "Task failed." in result.stdout
 
 
@@ -42,7 +42,7 @@ def test_cli_one_shot_blocked(mock_run: MagicMock) -> None:
     result = runner.invoke(app, ["test_task"])
 
     assert result.exit_code == 1
-    mock_run.assert_called_once_with("test_task")
+    mock_run.assert_called_once_with("test_task", on_progress=ANY)
     assert "Task blocked due to missing capabilities." in result.stdout
 
 
@@ -88,3 +88,24 @@ def test_cli_one_shot_seeding_failed_error_debug_mode(mock_run: MagicMock) -> No
     assert result.exit_code != 0
     assert result.exception is not None
     assert isinstance(result.exception, SeedingFailedError)
+
+
+@patch("velix_agent.core.application.AutonomousCodingLoop.run")
+def test_cli_one_shot_cancelled(mock_run: MagicMock) -> None:
+    mock_run.return_value = OrchestratorState.CANCELLED
+
+    result = runner.invoke(app, ["test_task"])
+
+    assert result.exit_code == 1
+    assert "Task cancelled." in result.stdout
+
+
+def test_cli_help_shows_epilog() -> None:
+    result = runner.invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "Examples:" in result.stdout
+    assert "Environment variables:" in result.stdout
+    assert "VELIX_USE_SHADOW_WORKSPACE" in result.stdout
+    assert "GEMINI_API_KEY" in result.stdout
+

@@ -79,11 +79,12 @@ class TestOneShotMode:
 
     @patch("velix_agent.core.application.AutonomousCodingLoop.run")
     def test_one_shot_exits_zero(self, mock_run) -> None:
+        from unittest.mock import ANY
         from velix_agent.orchestrator.models import OrchestratorState
         mock_run.return_value = OrchestratorState.COMPLETED
         result = runner.invoke(app, ["fix the failing tests"])
         assert result.exit_code == 0
-        mock_run.assert_called_once_with("fix the failing tests")
+        mock_run.assert_called_once_with("fix the failing tests", on_progress=ANY)
 
     @patch("velix_agent.core.application.AutonomousCodingLoop.run")
     def test_one_shot_shows_task(self, mock_run) -> None:

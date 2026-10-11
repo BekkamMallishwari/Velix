@@ -18,6 +18,7 @@ Architecture note:
 
 from __future__ import annotations
 
+import time
 from typing import Annotated
 
 import typer
@@ -30,6 +31,31 @@ from velix_agent.core.logging import get_logger
 logger = get_logger("cli")
 
 # ---------------------------------------------------------------------------
+# Help epilog — rendered by Typer/Rich in the --help output
+# ---------------------------------------------------------------------------
+
+_EPILOG = """
+[bold]Examples:[/bold]
+
+  [cyan]velix "fix the failing tests"[/cyan]     Run a one-shot task
+  [cyan]velix[/cyan]                              Start interactive REPL
+  [cyan]velix config[/cyan]                       Show current configuration
+  [cyan]velix -d "add logging"[/cyan]             One-shot with debug output
+
+[bold]Environment variables:[/bold]
+
+  [dim]VELIX_DEFAULT_PROVIDER[/dim]         Provider to use (gemini, openai, anthropic, local)
+  [dim]VELIX_DEFAULT_MODEL[/dim]            Model name (e.g. gemini-3.6-flash)
+  [dim]GEMINI_API_KEY[/dim]                 API key for Gemini provider
+  [dim]OPENAI_API_KEY[/dim]                 API key for OpenAI provider
+  [dim]ANTHROPIC_API_KEY[/dim]              API key for Anthropic provider
+  [dim]VELIX_USE_SHADOW_WORKSPACE[/dim]     Enable shadow workspace isolation (true/false)
+  [dim]VELIX_SHADOW_MAX_FILES[/dim]         Max files to seed (default 10 000)
+  [dim]VELIX_SHADOW_MAX_BYTES[/dim]         Max bytes to seed (default 2 GB)
+  [dim]VELIX_DEBUG[/dim]                    Enable debug mode (true/false)
+"""
+
+# ---------------------------------------------------------------------------
 # Typer application
 # ---------------------------------------------------------------------------
 
@@ -39,6 +65,7 @@ app = typer.Typer(
     no_args_is_help=False,
     add_completion=False,
     rich_markup_mode="rich",
+    epilog=_EPILOG,
 )
 
 
@@ -54,11 +81,34 @@ def _version_callback(value: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Spinner helper
+# ---------------------------------------------------------------------------
+
+_PHASE_ICONS: dict[str, str] = {
+    "planning": "🔍",
+    "planned": "📋",
+    "shadow": "🔒",
+    "step": "⚡",
+    "retry": "🔄",
+    "done": "✅",
+    "error": "❌",
+}
+
+
+def _format_status(phase: str, detail: str, elapsed: float) -> str:
+    """Build a spinner status string with an icon and elapsed time."""
+    icon = _PHASE_ICONS.get(phase, "⏳")
+    mins, secs = divmod(int(elapsed), 60)
+    time_str = f"{mins}:{secs:02d}" if mins else f"{secs}s"
+    return f"{icon} {detail}  [dim]({time_str})[/dim]"
+
+
+# ---------------------------------------------------------------------------
 # Main command
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(epilog=_EPILOG)
 def main(
     task: Annotated[
         str | None,
@@ -106,23 +156,7 @@ def main(
         elif task is not None:
             # One-shot mode.
             logger.debug("One-shot task: %s", task)
-            from velix_agent.orchestrator.models import OrchestratorState
-
-            state = runtime.app_loop.run(task)
-
-            if state == OrchestratorState.COMPLETED:
-                runtime.console.print("\n[green]Task completed successfully.[/green]")
-            elif state == OrchestratorState.FAILED:
-                print_error(runtime.console, "Task failed.")
-                raise typer.Exit(code=1)
-            elif state == OrchestratorState.BLOCKED:
-                print_error(runtime.console, "Task blocked due to missing capabilities.")
-                raise typer.Exit(code=1)
-            elif state == OrchestratorState.CANCELLED:
-                runtime.console.print("\n[yellow]Task cancelled.[/yellow]")
-                raise typer.Exit(code=1)
-            else:
-                runtime.console.print(f"\nTask finished with state: {state}")
+            _run_one_shot(runtime, task)
         else:
             # Interactive REPL.
             from velix_agent.cli.repl import start_repl
@@ -142,3 +176,50 @@ def main(
             raise
         print_error(console, f"Unexpected error: {exc}")
         raise typer.Exit(code=1) from exc
+
+
+def _run_one_shot(runtime: "Runtime", task: str) -> None:
+    """Execute a one-shot task with a live progress spinner."""
+    from rich.status import Status
+
+    from velix_agent.orchestrator.models import OrchestratorState
+
+    console = runtime.console
+    start = time.monotonic()
+
+    # Rich Status spinner — updated by the progress callback.
+    status = Status(
+        "Initializing…",
+        console=console,
+        spinner="dots",
+        spinner_style="cyan",
+    )
+
+    def _on_progress(phase: str, detail: str) -> None:
+        elapsed = time.monotonic() - start
+        status.update(_format_status(phase, detail, elapsed))
+
+    status.start()
+    try:
+        state = runtime.app_loop.run(task, on_progress=_on_progress)
+    finally:
+        status.stop()
+
+    elapsed = time.monotonic() - start
+    mins, secs = divmod(int(elapsed), 60)
+    time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+
+    if state == OrchestratorState.COMPLETED:
+        console.print(f"\n[green]✅ Task completed successfully.[/green]  [dim]({time_str})[/dim]")
+    elif state == OrchestratorState.FAILED:
+        print_error(console, f"Task failed.  ({time_str})")
+        raise typer.Exit(code=1)
+    elif state == OrchestratorState.BLOCKED:
+        print_error(console, f"Task blocked due to missing capabilities.  ({time_str})")
+        raise typer.Exit(code=1)
+    elif state == OrchestratorState.CANCELLED:
+        console.print(f"\n[yellow]Task cancelled.[/yellow]  [dim]({time_str})[/dim]")
+        raise typer.Exit(code=1)
+    else:
+        console.print(f"\nTask finished with state: {state}  [dim]({time_str})[/dim]")
+
