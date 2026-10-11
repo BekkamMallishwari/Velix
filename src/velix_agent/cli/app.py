@@ -129,6 +129,8 @@ def main(
 
             start_repl(runtime)
     except VelixError as exc:
+        if debug:
+            raise
         print_error(console, exc.message)
         raise typer.Exit(code=1) from exc
     except KeyboardInterrupt:

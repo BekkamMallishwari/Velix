@@ -52,3 +52,39 @@ def test_cli_repl_isolation(mock_start_repl: MagicMock) -> None:
 
     assert result.exit_code == 0
     mock_start_repl.assert_called_once()
+
+
+@patch("velix_agent.core.application.AutonomousCodingLoop.run")
+def test_cli_one_shot_seeding_failed_error(mock_run: MagicMock) -> None:
+    from velix_agent.workspace.models import SeedError, SeedErrorKind, SeedingFailedError
+
+    fatal_err = SeedError("bad_file.txt", SeedErrorKind.READ_ERROR, "Permission denied")
+    mock_run.side_effect = SeedingFailedError(
+        "Shadow workspace seeding failed with fatal error(s): bad_file.txt: Permission denied",
+        errors=[fatal_err],
+    )
+
+    result = runner.invoke(app, ["test_task"])
+
+    assert result.exit_code == 1
+    assert "Unexpected error" not in result.stdout
+    assert "Shadow workspace seeding failed with fatal error(s):" in result.stdout
+    assert "bad_file.txt" in result.stdout
+    assert "Permission denied" in result.stdout
+
+
+@patch("velix_agent.core.application.AutonomousCodingLoop.run")
+def test_cli_one_shot_seeding_failed_error_debug_mode(mock_run: MagicMock) -> None:
+    from velix_agent.workspace.models import SeedError, SeedErrorKind, SeedingFailedError
+
+    fatal_err = SeedError("bad_file.txt", SeedErrorKind.READ_ERROR, "Permission denied")
+    mock_run.side_effect = SeedingFailedError(
+        "Shadow workspace seeding failed with fatal error(s): bad_file.txt: Permission denied",
+        errors=[fatal_err],
+    )
+
+    result = runner.invoke(app, ["--debug", "test_task"])
+
+    assert result.exit_code != 0
+    assert result.exception is not None
+    assert isinstance(result.exception, SeedingFailedError)
