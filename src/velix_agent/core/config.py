@@ -105,3 +105,17 @@ class VelixConfig(BaseSettings):
     local_base_url: str = Field(
         default="http://localhost:11434", description="Base URL for the local provider"
     )
+
+    # --- Shadow Workspace --------------------------------------------------
+    use_shadow_workspace: bool = Field(
+        default=False,
+        description="Run agent file operations and execution inside an isolated shadow workspace",
+    )
+    shadow_max_files: int = Field(
+        default=100_000,
+        description="Maximum entries allowed when seeding a shadow workspace",
+    )
+    shadow_max_bytes: int = Field(
+        default=2 * 1024 * 1024 * 1024,
+        description="Maximum total bytes allowed when seeding a shadow workspace (default 2GB)",
+    )

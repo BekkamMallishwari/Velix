@@ -51,9 +51,35 @@ class AutonomousCodingLoop:
             limits=limits,
         )
 
-        # 4. Run loop
+        # 4. Run loop (with optional shadow workspace isolation)
         logger.info("Starting Orchestrator run.")
-        controller.run()
+        if getattr(self.agent.config, "use_shadow_workspace", False):
+            from velix_agent.tools.registry import create_default_tool_registry
+            from velix_agent.workspace.session import ShadowWorkspaceSession
+
+            with ShadowWorkspaceSession(
+                host_workspace=self.agent.cwd,
+                max_files=self.agent.config.shadow_max_files,
+                max_bytes=self.agent.config.shadow_max_bytes,
+            ) as shadow_root:
+                logger.info("Shadow workspace active at: %s", shadow_root)
+                # Rebind agent tools to the shadow root
+                saved_registry = self.agent.tool_registry
+                saved_cwd = self.agent.cwd
+                try:
+                    self.agent.tool_registry = create_default_tool_registry(
+                        workspace_root=shadow_root,
+                        sandbox_manager=self.planner.sandbox_manager,
+                        memory_store=self.agent.memory_manager.store if self.agent.memory_manager else None,
+                    )
+                    self.agent.cwd = shadow_root
+                    controller.run()
+                finally:
+                    self.agent.tool_registry = saved_registry
+                    self.agent.cwd = saved_cwd
+        else:
+            controller.run()
 
         logger.info("Orchestrator finished with state: %s", controller.context.orchestrator_state)
         return controller.context.orchestrator_state
+
