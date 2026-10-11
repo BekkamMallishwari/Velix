@@ -201,6 +201,35 @@ class LinuxSandboxBackend(SandboxBackend):
             workspace_path,
         ]
 
+        # Protect .git from read/write inside the sandbox.
+        # - If .git is a directory: mount tmpfs with mode 0000 over it.
+        # - If .git is a file (e.g. Git worktree): mount /dev/null with mode 0000 over it.
+        # - If .git does not exist: create mountpoint and mount tmpfs with mode 0000 over it.
+        # This prevents both reading sensitive git metadata and modifying git hooks/config.
+        git_path = Path(workspace_path) / ".git"
+        if git_path.is_dir():
+            bwrap_cmd.extend([
+                "--perms",
+                "0000",
+                "--tmpfs",
+                git_path.as_posix(),
+            ])
+        elif git_path.is_file():
+            bwrap_cmd.extend([
+                "--ro-bind",
+                "/dev/null",
+                git_path.as_posix(),
+            ])
+        else:
+            bwrap_cmd.extend([
+                "--dir",
+                git_path.as_posix(),
+                "--perms",
+                "0000",
+                "--tmpfs",
+                git_path.as_posix(),
+            ])
+
         sys_prefix = Path(sys.prefix).resolve()
         exec_file_resolved = Path(sys.executable).resolve()
         exec_file_unresolved = Path(sys.executable)
