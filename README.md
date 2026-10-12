@@ -90,35 +90,6 @@ Copy the provided template to create your environment file:
 cp .env.example .env
 ```
 
-### Provider / API Key Configuration
-
-Set API keys in your `.env` file. **Do not commit `.env` to version control** — it is already listed in `.gitignore`.
-
-```dotenv
-# Required: choose your default provider
-VELIX_DEFAULT_PROVIDER=gemini          # gemini | openai | openrouter | local
-VELIX_DEFAULT_MODEL=gemini-3.6-flash   # provider-specific model name
-
-# API keys (set only the ones you use)
-VELIX_GEMINI_API_KEY=your-gemini-key
-VELIX_OPENAI_API_KEY=your-openai-key
-VELIX_ANTHROPIC_API_KEY=your-anthropic-key
-VELIX_OPENROUTER_API_KEY=your-openrouter-key
-
-# Optional: fallback models tried when the primary model fails
-VELIX_GEMINI_FALLBACK_MODEL=
-VELIX_OPENAI_FALLBACK_MODEL=
-VELIX_OPENROUTER_FALLBACK_MODEL=
-
-# Provider fallback chain (comma-separated, tried in order)
-# VELIX_PROVIDER_CHAIN=gemini,openai,openrouter,local
-
-# Local model (Ollama or compatible)
-VELIX_LOCAL_PROVIDER=ollama
-VELIX_LOCAL_MODEL=llama3
-VELIX_LOCAL_BASE_URL=http://localhost:11434
-```
-
 ### General Settings
 
 | Variable                  | Default      | Description                                  |
