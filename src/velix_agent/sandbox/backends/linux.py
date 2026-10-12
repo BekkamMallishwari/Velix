@@ -1,4 +1,6 @@
 import contextlib
+import fcntl
+import hashlib
 import os
 import platform
 import resource
@@ -6,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import typing
 from pathlib import Path
@@ -24,6 +27,10 @@ class LinuxSandboxBackend(SandboxBackend):
     _systemd_supported_cache: typing.ClassVar[bool | None] = None
     _unshare_net_supported_cache: typing.ClassVar[bool | None] = None
     _bwrap_execution_supported_cache: typing.ClassVar[bool | None] = None
+
+    # Workspace coordination for transient .git sentinel management
+    _sentinel_global_lock: typing.ClassVar[threading.Lock] = threading.Lock()
+    _workspace_sentinels: typing.ClassVar[dict[str, dict[str, typing.Any]]] = {}
 
     @classmethod
     def _detect_systemd(cls) -> bool:
@@ -202,33 +209,156 @@ class LinuxSandboxBackend(SandboxBackend):
         ]
 
         # Protect .git from read/write inside the sandbox.
-        # - If .git is a directory: mount tmpfs with mode 0000 over it.
-        # - If .git is a file (e.g. Git worktree): mount /dev/null with mode 0000 over it.
-        # - If .git does not exist: create mountpoint and mount tmpfs with mode 0000 over it.
-        # This prevents both reading sensitive git metadata and modifying git hooks/config.
+        # - If .git is an existing directory: mount tmpfs with mode 0000 over it.
+        # - If .git is a regular file (e.g. Git worktree) or symlink: mount /dev/null read-only.
+        # - If .git does not exist on host: establish a transient sentinel directory with mode 0000
+        #   and mount tmpfs with mode 0000 over it. This prevents the sandbox process from creating
+        #   a .git directory or planting rogue hooks on the host.
+        # Cross-process coordination protocol:
+        # 1. Dedicated workspace IPC state directory in tempdir: velix_ws_<hash>/
+        # 2. Master lock (master.lock) serialized briefly during setup and teardown.
+        # 3. Active execution token (clients/token_<pid>_<thread_id>_<uuid>.token) held locked
+        #    via fcntl.flock(LOCK_EX) throughout the Bubblewrap execution.
+        # 4. Crashed processes automatically release token lock upon OS process termination;
+        #    active tokens are discovered via non-blocking flock probes (EWOULDBLOCK).
+        # 5. Exact device & inode identity (st_dev, st_ino) recorded in sentinel.info.
         git_path = Path(workspace_path) / ".git"
-        if git_path.is_dir():
-            bwrap_cmd.extend([
-                "--perms",
-                "0000",
-                "--tmpfs",
-                git_path.as_posix(),
-            ])
-        elif git_path.is_file():
-            bwrap_cmd.extend([
-                "--ro-bind",
-                "/dev/null",
-                git_path.as_posix(),
-            ])
-        else:
-            bwrap_cmd.extend([
-                "--dir",
-                git_path.as_posix(),
-                "--perms",
-                "0000",
-                "--tmpfs",
-                git_path.as_posix(),
-            ])
+        canonical_ws = Path(workspace_path).resolve().as_posix()
+        created_git_sentinel = False
+        sentinel_identity: tuple[int, int] | None = None
+        execution_exception: Exception | None = None
+
+        lock_hash = hashlib.sha256(canonical_ws.encode("utf-8")).hexdigest()[:16]
+        ipc_dir = Path(tempfile.gettempdir()) / f"velix_ws_{lock_hash}"
+        master_lock_path = ipc_dir / "master.lock"
+        clients_dir = ipc_dir / "clients"
+        sentinel_info_path = ipc_dir / "sentinel.info"
+
+        import uuid
+
+        token_uid = uuid.uuid4().hex[:8]
+        client_token_name = f"token_{os.getpid()}_{threading.get_ident()}_{token_uid}.token"
+        client_token_path = clients_dir / client_token_name
+        client_token_fd: int | None = None
+
+        # Fail-closed helper for acquiring master lock
+        def _acquire_master_lock() -> int:
+            try:
+                ipc_dir.mkdir(parents=True, exist_ok=True)
+                clients_dir.mkdir(parents=True, exist_ok=True)
+                fd = os.open(master_lock_path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                return fd
+            except Exception as lock_exc:
+                raise SandboxError(
+                    f"Failed to acquire workspace master lock for {workspace_path}: {lock_exc}"
+                ) from lock_exc
+
+        def _release_master_lock(fd: int) -> None:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+
+        def _count_active_clients_and_prune() -> int:
+            active = 0
+            if not clients_dir.is_dir():
+                return 0
+            for child in clients_dir.iterdir():
+                if not child.name.endswith(".token"):
+                    continue
+                try:
+                    probe_fd = os.open(child, os.O_RDWR | os.O_CLOEXEC)
+                    try:
+                        fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        # Lock succeeded => owning process or thread is dead
+                        fcntl.flock(probe_fd, fcntl.LOCK_UN)
+                        os.close(probe_fd)
+                        with contextlib.suppress(OSError):
+                            child.unlink()
+                    except (BlockingIOError, OSError):
+                        # Lock busy => client is alive and holding flock
+                        active += 1
+                        os.close(probe_fd)
+                except OSError:
+                    pass
+            return active
+
+        # Step 1: Acquire master lock to register client token and inspect/create sentinel
+        master_fd = _acquire_master_lock()
+        try:
+            try:
+                client_token_fd = os.open(
+                    client_token_path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600
+                )
+                fcntl.flock(client_token_fd, fcntl.LOCK_EX)
+            except Exception as client_exc:
+                if client_token_fd is not None:
+                    with contextlib.suppress(OSError):
+                        os.close(client_token_fd)
+                    with contextlib.suppress(OSError):
+                        client_token_path.unlink()
+                raise SandboxError(
+                    f"Failed to acquire execution client token for {workspace_path}: {client_exc}"
+                ) from client_exc
+
+            _count_active_clients_and_prune()
+            # Inspect host .git
+            st_existing = None
+            try:
+                st_existing = os.lstat(git_path)
+            except OSError:
+                st_existing = None
+
+            if st_existing is not None:
+                import stat as pystat
+
+                if pystat.S_ISDIR(st_existing.st_mode):
+                    # Check if recorded sentinel info matches this directory
+                    matched_sentinel = False
+                    if sentinel_info_path.is_file():
+                        try:
+                            import json
+
+                            info = json.loads(sentinel_info_path.read_text())
+                            expected_id = (info.get("dev"), info.get("ino"))
+                            if (st_existing.st_dev, st_existing.st_ino) == expected_id:
+                                matched_sentinel = True
+                        except Exception:
+                            matched_sentinel = False
+                    if matched_sentinel:
+                        created_git_sentinel = True
+                        sentinel_identity = (st_existing.st_dev, st_existing.st_ino)
+                    bwrap_cmd.extend(["--perms", "0000", "--tmpfs", git_path.as_posix()])
+                elif pystat.S_ISREG(st_existing.st_mode) or pystat.S_ISLNK(st_existing.st_mode):
+                    bwrap_cmd.extend(["--ro-bind", "/dev/null", git_path.as_posix()])
+            else:
+                # .git does not exist: create transient sentinel
+                try:
+                    git_path.mkdir(exist_ok=False)
+                    git_path.chmod(0o000)
+                    st = os.lstat(git_path)
+                    sentinel_identity = (st.st_dev, st.st_ino)
+                    created_git_sentinel = True
+                    import json
+
+                    sentinel_info_path.write_text(
+                        json.dumps({
+                            "dev": sentinel_identity[0],
+                            "ino": sentinel_identity[1],
+                            "pid": os.getpid(),
+                        })
+                    )
+                    bwrap_cmd.extend(["--perms", "0000", "--tmpfs", git_path.as_posix()])
+                except Exception as sentinel_exc:
+                    logger.warning(
+                        "Could not establish transient .git sentinel directory: %s", sentinel_exc
+                    )
+                    raise SandboxError(
+                        f"Failed to establish transient .git sentinel for {workspace_path}: "
+                        f"{sentinel_exc}"
+                    ) from sentinel_exc
+        finally:
+            _release_master_lock(master_fd)
 
         sys_prefix = Path(sys.prefix).resolve()
         exec_file_resolved = Path(sys.executable).resolve()
@@ -385,9 +515,86 @@ class LinuxSandboxBackend(SandboxBackend):
                 command=command,
                 truncation_status={"stdout": stdout_truncated[0], "stderr": stderr_truncated[0]},
             )
-        except Exception as e:
-            raise SandboxError(f"Failed to execute sandboxed command: {e}") from e
+        except Exception as exec_exc:
+            execution_exception = exec_exc
+            if isinstance(exec_exc, SandboxError):
+                raise
+            raise SandboxError(f"Failed to execute sandboxed command: {exec_exc}") from exec_exc
         finally:
+            cleanup_err: Exception | None = None
+            try:
+                # Coordinate teardown under master lock
+                master_fd = _acquire_master_lock()
+                try:
+                    # Release and unlink this execution's client token inside master lock
+                    if client_token_fd is not None:
+                        with contextlib.suppress(OSError):
+                            fcntl.flock(client_token_fd, fcntl.LOCK_UN)
+                            os.close(client_token_fd)
+                        client_token_fd = None
+                    with contextlib.suppress(OSError):
+                        client_token_path.unlink()
+
+                    rem_active = _count_active_clients_and_prune()
+                    if rem_active == 0 and created_git_sentinel and sentinel_identity is not None:
+                        # Attempt safe directory-descriptor-relative cleanup
+                        parent_fd: int | None = None
+                        try:
+                            parent_fd = os.open(
+                                workspace_path, os.O_DIRECTORY | os.O_RDONLY | os.O_CLOEXEC
+                            )
+                            # Check status relative to parent directory without following symlinks
+                            st = os.stat(".git", dir_fd=parent_fd, follow_symlinks=False)
+                            import stat as pystat
+
+                            if (
+                                not pystat.S_ISLNK(st.st_mode)
+                                and pystat.S_ISDIR(st.st_mode)
+                                and (st.st_dev, st.st_ino) == sentinel_identity
+                            ):
+                                # Atomic removal: POSIX rmdir operates on parent and does NOT
+                                # require write permission on the target directory itself.
+                                # Therefore no chmod(0700) is executed, eliminating the TOCTOU
+                                # symlink retargeting window.
+                                os.rmdir(".git", dir_fd=parent_fd)
+                                with contextlib.suppress(OSError):
+                                    sentinel_info_path.unlink()
+                            else:
+                                recovery_msg = (
+                                    f"Sentinel at {git_path} was replaced or has mismatched "
+                                    f"identity (expected {sentinel_identity}, "
+                                    f"found {(st.st_dev, st.st_ino)}). Leaving path untouched. "
+                                    f"Manual recovery: verify contents and remove with "
+                                    f"'chmod 700 {git_path} && rmdir {git_path}'."
+                                )
+                                logger.error(recovery_msg)
+                                cleanup_err = SandboxError(recovery_msg)
+                        except OSError as os_err:
+                            msg = f"Failed to remove sentinel directory at {git_path}: {os_err}"
+                            logger.error(msg)
+                            cleanup_err = SandboxError(msg)
+                            cleanup_err.__cause__ = os_err
+                        finally:
+                            if parent_fd is not None:
+                                with contextlib.suppress(OSError):
+                                    os.close(parent_fd)
+                finally:
+                    _release_master_lock(master_fd)
+            except Exception as exc:
+                cleanup_err = exc
+
+            if cleanup_err is not None:
+                logger.error(
+                    "Security-relevant sentinel cleanup error on %s: %s",
+                    git_path,
+                    cleanup_err,
+                )
+                if execution_exception is not None:
+                    raise SandboxError(
+                        f"Sentinel cleanup failed ({cleanup_err}); "
+                        f"original execution error: {execution_exception}"
+                    ) from execution_exception
+                raise SandboxError(f"Sentinel cleanup failed: {cleanup_err}") from cleanup_err
             if scope_name:
                 with contextlib.suppress(Exception):
                     subprocess.run(

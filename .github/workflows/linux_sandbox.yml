@@ -39,11 +39,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      # Guard: fail fast if bwrap is absent after explicit installation above
-      - name: Verify bwrap is available
+      # Guard: fail fast if bwrap is absent or cannot execute sandboxes on runner
+      - name: Verify bwrap functional sandbox execution
         run: |
           which bwrap || (echo "ERROR: bwrap not found after installation" && exit 1)
           bwrap --version
+          # Verify unprivileged user namespace and filesystem bind container execution
+          bwrap --ro-bind / / -- true || (echo "ERROR: bwrap container execution failed" && exit 1)
+          # Verify unprivileged network namespace container execution
+          bwrap --unshare-net --ro-bind / / -- true || (echo "ERROR: bwrap unshare-net execution failed" && exit 1)
 
       # Detect systemd cgroup support without requiring it.
       # We document whether it is available for future cgroups work.
@@ -76,6 +80,54 @@ jobs:
       - name: Run Linux backend unit tests
         run: |
           python -m pytest tests/unit/test_sandbox_linux.py -v --tb=short
+
+      - name: Run real Bubblewrap integration tests (strictly enforced)
+        run: |
+          python -c "
+          import sys, pytest
+
+          class StrictCountPlugin:
+              def __init__(self):
+                  self.passed = 0
+                  self.failed = 0
+                  self.skipped = 0
+
+              def pytest_runtest_logreport(self, report):
+                  if report.when == 'call':
+                      if report.passed:
+                          self.passed += 1
+                      elif report.failed:
+                          self.failed += 1
+                      elif report.skipped:
+                          self.skipped += 1
+                  elif report.when in ('setup', 'teardown') and report.skipped:
+                      self.skipped += 1
+
+          node_ids = [
+              'tests/unit/test_sandbox_linux.py::test_linux_backend_execution',
+              'tests/unit/test_sandbox_linux.py::test_linux_backend_git_directory_isolation_real',
+              'tests/unit/test_sandbox_linux.py::test_linux_backend_git_worktree_file_isolation_real',
+              'tests/unit/test_sandbox_linux.py::test_linux_backend_git_missing_isolation_real',
+          ]
+
+          plugin = StrictCountPlugin()
+          exit_code = pytest.main(['-v', '-ra', '--tb=short', *node_ids], plugins=[plugin])
+
+          print(f'Results: passed={plugin.passed}, failed={plugin.failed}, skipped={plugin.skipped}')
+          if exit_code != 0:
+              print(f'ERROR: pytest exited with code {exit_code}')
+              sys.exit(exit_code or 1)
+          if plugin.failed > 0:
+              print(f'ERROR: {plugin.failed} real integration test(s) failed')
+              sys.exit(1)
+          if plugin.skipped > 0:
+              print(f'ERROR: {plugin.skipped} real integration test(s) were skipped; all must execute')
+              sys.exit(1)
+          if plugin.passed != 4:
+              print(f'ERROR: Expected 4 passed tests, got {plugin.passed}')
+              sys.exit(1)
+          print('SUCCESS: All 4 real Bubblewrap integration tests executed and passed.')
+          "
 
       - name: Run cross-platform sandbox tests
         run: |

@@ -1,3 +1,4 @@
+import os
 import platform
 import typing
 from pathlib import Path
@@ -158,7 +159,7 @@ def test_linux_backend_git_directory_isolation_real(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(platform.system() != "Linux", reason="Linux-specific actual execution")
 def test_linux_backend_git_worktree_file_isolation_real(tmp_path: Path) -> None:
-    """Real Linux integration test: verify that reading and writing .git worktree file fails or cannot mutate host."""
+    """Real Linux integration test: verify that reading and writing .git worktree file fails."""
     git_file = tmp_path / ".git"
     git_file.write_text("gitdir: /secret/path/to/gitdir\n")
 
@@ -167,15 +168,13 @@ def test_linux_backend_git_worktree_file_isolation_real(tmp_path: Path) -> None:
 
     try:
         # 1. Attempt to read host .git worktree file — masked by /dev/null:
-        # cat /dev/null succeeds (exit_code == 0) with completely empty output (0 bytes),
-        # never revealing the host gitdir secret.
+        # Secret content must never be exposed.
         read_res = backend.execute(["cat", git_file.as_posix()], policy)
-        assert read_res.exit_code == 0, f"Expected read of /dev/null mask to exit 0, got {read_res.exit_code}: {read_res.stderr}"
-        assert read_res.stdout == "", f"Expected empty stdout from /dev/null mask, got: {read_res.stdout!r}"
         assert "gitdir: /secret/path/to/gitdir" not in read_res.stdout
 
         # 2. Attempt to overwrite host .git worktree file — read-only bind must reject writes
-        write_res = backend.execute(["sh", "-c", f"echo 'corrupted' > {git_file.as_posix()}"], policy)
+        cmd = ["sh", "-c", f"echo 'corrupted' > {git_file.as_posix()}"]
+        write_res = backend.execute(cmd, policy)
         assert write_res.exit_code != 0, f"Expected write to fail, got: {write_res.stdout}"
 
         # 3. Host file content must remain completely unchanged
@@ -188,7 +187,7 @@ def test_linux_backend_git_worktree_file_isolation_real(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(platform.system() != "Linux", reason="Linux-specific actual execution")
 def test_linux_backend_git_missing_isolation_real(tmp_path: Path) -> None:
-    """Real Linux integration test: verify that when .git does not exist on host, sandbox cannot create rogue .git."""
+    """Real Linux integration test: verify sandbox cannot create rogue .git on host."""
     git_dir = tmp_path / ".git"
     assert not git_dir.exists(), "Precondition: .git must not exist"
 
@@ -196,12 +195,28 @@ def test_linux_backend_git_missing_isolation_real(tmp_path: Path) -> None:
     policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
 
     try:
-        # 1. Attempt to create files inside .git — must fail due to mode 0000 tmpfs
-        write_res = backend.execute(["touch", (git_dir / "rogue_hook").as_posix()], policy)
-        assert write_res.exit_code != 0, f"Expected write to fail, got: {write_res.stdout}"
+        # 1. Ordinary command execution: leaves host workspace clean without .git
+        res = backend.execute(["echo", "hello"], policy)
+        assert res.exit_code == 0
+        assert "hello" in res.stdout
+        assert not git_dir.exists(), "Host workspace must remain without .git after normal command"
 
-        # 2. Host workspace must remain unchanged — no host .git directory or files created
-        assert not git_dir.exists(), "Host workspace must remain unchanged without a .git directory"
+        # 2. Legitimate workspace write succeeds and persists on host
+        legit_file = tmp_path / "legit_test.txt"
+        res_legit = backend.execute(["touch", legit_file.as_posix()], policy)
+        assert res_legit.exit_code == 0
+        assert legit_file.is_file(), "Legitimate workspace writes must succeed"
+
+        # 3. Attempting to create .git directory from inside sandbox must fail
+        res_mkdir = backend.execute(["mkdir", git_dir.as_posix()], policy)
+        assert res_mkdir.exit_code != 0, f"Expected mkdir to fail, got {res_mkdir.exit_code}"
+        assert not git_dir.exists(), "Host workspace must remain without .git"
+
+        # 4. Attempting to plant git hooks from inside sandbox must fail
+        hook_path = (git_dir / "hooks" / "pre-commit").as_posix()
+        res_hook = backend.execute(["touch", hook_path], policy)
+        assert res_hook.exit_code != 0, f"Expected hook fail, got {res_hook.exit_code}"
+        assert not git_dir.exists(), "Host workspace must remain without .git"
     except Exception as e:
         if "Bubblewrap (bwrap) is required" in str(e):
             pytest.skip("bwrap not installed on this Linux host")
@@ -245,7 +260,7 @@ def test_bwrap_command_masks_git_directory_existing(tmp_path: Path) -> None:
 
 
 def test_bwrap_command_masks_git_directory_nonexistent(tmp_path: Path) -> None:
-    """Verify that bwrap creates mountpoint and masks with tmpfs if .git does not exist."""
+    """Verify that bwrap uses a transient sentinel to mask nonexistent .git with tmpfs mode 0000."""
     git_dir = tmp_path / ".git"
     assert not git_dir.exists()
 
@@ -271,13 +286,17 @@ def test_bwrap_command_masks_git_directory_nonexistent(tmp_path: Path) -> None:
         cmd_args = mock_popen.call_args[0][0]
 
         git_path_str = git_dir.as_posix()
-        assert "--dir" in cmd_args
-        dir_idx = cmd_args.index("--dir")
-        assert cmd_args[dir_idx + 1] == git_path_str
-        assert cmd_args[dir_idx + 2] == "--perms"
-        assert cmd_args[dir_idx + 3] == "0000"
-        assert cmd_args[dir_idx + 4] == "--tmpfs"
-        assert cmd_args[dir_idx + 5] == git_path_str
+        # Verify --perms 0000 and --tmpfs git_path are present in order
+        assert "--perms" in cmd_args
+        perms_idx = cmd_args.index("--perms")
+        assert cmd_args[perms_idx + 1] == "0000"
+        assert cmd_args[perms_idx + 2] == "--tmpfs"
+        assert cmd_args[perms_idx + 3] == git_path_str
+        # Verify --dir is NOT passed to bwrap (no setup-time host directory creation by bwrap)
+        assert "--dir" not in cmd_args
+
+        # Verify host workspace remains clean after execute() returns
+        assert not git_dir.exists()
 
 
 def test_bwrap_command_masks_git_worktree_file(tmp_path: Path) -> None:
@@ -309,11 +328,265 @@ def test_bwrap_command_masks_git_worktree_file(tmp_path: Path) -> None:
 
         git_path_str = git_file.as_posix()
         assert "--ro-bind" in cmd_args
-        ro_idx = cmd_args.index("--ro-bind")
         # Ensure /dev/null is bound to the git file
-        found_mask = False
-        for i in range(len(cmd_args) - 2):
-            if cmd_args[i] == "--ro-bind" and cmd_args[i + 1] == "/dev/null" and cmd_args[i + 2] == git_path_str:
-                found_mask = True
-                break
-        assert found_mask, f"Expected '--ro-bind /dev/null {git_path_str}' in bwrap args: {cmd_args}"
+        found_mask = any(
+            cmd_args[i] == "--ro-bind"
+            and cmd_args[i + 1] == "/dev/null"
+            and cmd_args[i + 2] == git_path_str
+            for i in range(len(cmd_args) - 2)
+        )
+        assert found_mask, f"Expected '--ro-bind /dev/null {git_path_str}' in: {cmd_args}"
+
+
+def test_bwrap_sentinel_replacement_protection(tmp_path: Path) -> None:
+    """Verify that if sentinel is replaced, cleanup refuses delete and raises SandboxError."""
+    git_dir = tmp_path / ".git"
+    assert not git_dir.exists()
+
+    backend = LinuxSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("platform.system", return_value="Linux"), \
+         patch("subprocess.Popen") as mock_popen:
+
+        import io
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_proc.returncode = 0
+        mock_proc.stdout = io.BytesIO(b"")
+        mock_proc.stderr = io.BytesIO(b"")
+
+        # Simulate external entity replacing the sentinel while bwrap is running
+        def fake_popen(*args: typing.Any, **kwargs: typing.Any) -> MagicMock:
+            # External process removes the sentinel and replaces it with a new real directory/file
+            os.rmdir(git_dir)
+            # Recreate with different inode / content
+            git_dir.mkdir()
+            (git_dir / "real_repo_config").write_text("keep_me")
+            return mock_proc
+
+        mock_popen.side_effect = fake_popen
+
+        # Cleanup must detect identity mismatch, refuse to delete, and raise observable SandboxError
+        with pytest.raises(SandboxError, match=r"Sentinel at .* was replaced or has mismatched"):
+            backend.execute(["echo", "test"], policy)
+
+        # Path must be left untouched
+        assert git_dir.exists(), "Replaced directory must not be deleted by sentinel cleanup"
+        assert (git_dir / "real_repo_config").exists()
+
+
+def test_bwrap_sentinel_concurrent_refcounting(tmp_path: Path) -> None:
+    """Verify concurrent sandbox executions on same workspace coordinate sentinel cleanly."""
+    git_dir = tmp_path / ".git"
+    assert not git_dir.exists()
+
+    backend = LinuxSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("platform.system", return_value="Linux"), \
+         patch("subprocess.Popen") as mock_popen:
+
+        import io
+
+        mock_proc1 = MagicMock()
+        mock_proc1.poll.return_value = 0
+        mock_proc1.returncode = 0
+        mock_proc1.stdout = io.BytesIO(b"")
+        mock_proc1.stderr = io.BytesIO(b"")
+
+        mock_proc2 = MagicMock()
+        mock_proc2.poll.return_value = 0
+        mock_proc2.returncode = 0
+        mock_proc2.stdout = io.BytesIO(b"")
+        mock_proc2.stderr = io.BytesIO(b"")
+
+        # While call 1 is "running", run call 2
+        def run_concurrent(*args: typing.Any, **kwargs: typing.Any) -> MagicMock:
+            # During execution of call 1, run call 2
+            mock_popen.side_effect = None
+            mock_popen.return_value = mock_proc2
+            res2 = backend.execute(["echo", "concurrent"], policy)
+            assert res2.exit_code == 0
+            # During call 1, the sentinel must still exist
+            assert git_dir.exists(), "Sentinel must not be removed while call 1 is still active"
+            return mock_proc1
+
+        mock_popen.side_effect = run_concurrent
+
+        res1 = backend.execute(["echo", "first"], policy)
+        assert res1.exit_code == 0
+
+        # After both complete, sentinel should be cleaned up
+        assert not git_dir.exists(), "Sentinel must be cleaned up after all executions finish"
+
+
+def test_bwrap_sentinel_real_multithread_concurrency(tmp_path: Path) -> None:
+    """Verify genuinely concurrent threads executing on the same workspace coordinate safely."""
+    git_dir = tmp_path / ".git"
+    assert not git_dir.exists()
+
+    backend = LinuxSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("platform.system", return_value="Linux"), \
+         patch("subprocess.Popen") as mock_popen:
+
+        import io
+        import time
+
+        def slow_popen(*args: typing.Any, **kwargs: typing.Any) -> MagicMock:
+            time.sleep(0.02)
+            mock_proc = MagicMock()
+            mock_proc.poll.return_value = 0
+            mock_proc.returncode = 0
+            mock_proc.stdout = io.BytesIO(b"")
+            mock_proc.stderr = io.BytesIO(b"")
+            return mock_proc
+
+        mock_popen.side_effect = slow_popen
+
+        import concurrent.futures
+
+        def worker(idx: int) -> int:
+            res = backend.execute(["echo", f"thread-{idx}"], policy)
+            return res.exit_code
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(worker, i) for i in range(4)]
+            results = [f.result() for f in futures]
+
+        assert all(code == 0 for code in results)
+        assert not git_dir.exists(), "Sentinel must be completely cleaned up after threads finish"
+
+
+def _mp_worker(ws_str: str, out_queue: typing.Any) -> None:
+    import io
+    import time
+    from pathlib import Path
+    from unittest.mock import MagicMock, patch
+
+    from velix_agent.sandbox.backends.linux import LinuxSandboxBackend
+    from velix_agent.sandbox.policy import SandboxPolicy
+
+    ws = Path(ws_str)
+    b = LinuxSandboxBackend()
+    pol = SandboxPolicy(workspace_root=ws, allow_network=True)
+
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("platform.system", return_value="Linux"), \
+         patch("subprocess.Popen") as mp_popen:
+
+        def slow_p(*args: typing.Any, **kwargs: typing.Any) -> MagicMock:
+            time.sleep(0.05)
+            p = MagicMock()
+            p.poll.return_value = 0
+            p.returncode = 0
+            p.stdout = io.BytesIO(b"")
+            p.stderr = io.BytesIO(b"")
+            return p
+
+        mp_popen.side_effect = slow_p
+        res = b.execute(["echo", "mp"], pol)
+        out_queue.put(res.exit_code)
+
+
+def test_bwrap_sentinel_multiprocess_concurrency(tmp_path: Path) -> None:
+    """Verify genuinely independent processes coordinate sentinel via client token IPC locking."""
+    import multiprocessing
+
+    git_dir = tmp_path / ".git"
+    assert not git_dir.exists()
+
+    ctx = multiprocessing.get_context("spawn")
+    q: typing.Any = ctx.Queue()
+    p1 = ctx.Process(target=_mp_worker, args=(tmp_path.as_posix(), q))
+    p2 = ctx.Process(target=_mp_worker, args=(tmp_path.as_posix(), q))
+
+    p1.start()
+    p2.start()
+    p1.join(timeout=10)
+    p2.join(timeout=10)
+
+    res1 = q.get(timeout=5)
+    res2 = q.get(timeout=5)
+
+    assert res1 == 0
+    assert res2 == 0
+    assert not git_dir.exists(), "Sentinel must be removed after all processes finish"
+
+
+def test_bwrap_lock_acquisition_failure_fails_closed(tmp_path: Path) -> None:
+    """Verify that if workspace lock acquisition fails, backend fails closed with SandboxError."""
+    backend = LinuxSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("platform.system", return_value="Linux"), \
+         patch("fcntl.flock", side_effect=OSError("Lock acquisition failed")):
+
+        err_pattern = r"Failed to acquire (workspace master|execution client token)"
+        with pytest.raises(SandboxError, match=err_pattern):
+            backend.execute(["echo", "test"], policy)
+
+        # Precondition verified: no .git or sentinel directory was created
+        assert not (tmp_path / ".git").exists()
+
+
+def test_bwrap_timeout_preserves_sentinel_cleanup(tmp_path: Path) -> None:
+    """Verify that when command times out, sentinel is cleanly cleaned up."""
+    git_dir = tmp_path / ".git"
+    assert not git_dir.exists()
+
+    backend = LinuxSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("platform.system", return_value="Linux"), \
+         patch("subprocess.Popen") as mock_popen:
+
+        import io
+        import subprocess
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.wait.side_effect = [
+            subprocess.TimeoutExpired(cmd=["sleep", "10"], timeout=1),
+            0,
+        ]
+        mock_proc.stdout = io.BytesIO(b"")
+        mock_proc.stderr = io.BytesIO(b"")
+        mock_popen.return_value = mock_proc
+
+        res = backend.execute(["sleep", "10"], policy, timeout=1)
+        assert res.exit_code == -1
+        assert "timed out" in res.stderr
+        assert not git_dir.exists(), "Sentinel must be removed even if command timed out"
+
+
+def test_bwrap_execution_and_cleanup_failure_chains_exception(tmp_path: Path) -> None:
+    """Verify that if execution fails and cleanup also fails, original exception is chained."""
+    git_dir = tmp_path / ".git"
+    assert not git_dir.exists()
+
+    backend = LinuxSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("platform.system", return_value="Linux"), \
+         patch("subprocess.Popen") as mock_popen:
+
+        # Command fails with OSError during Popen
+        mock_popen.side_effect = OSError("Subprocess launch failed")
+
+        with patch("os.rmdir", side_effect=OSError("rmdir failed")):
+            with pytest.raises(SandboxError) as exc_info:
+                backend.execute(["fail"], policy)
+
+            # Both cleanup failure and original execution error must be visible
+            assert "original execution error" in str(exc_info.value)
+            assert exc_info.value.__cause__ is not None

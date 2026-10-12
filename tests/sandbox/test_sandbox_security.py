@@ -630,6 +630,11 @@ def test_sandbox_cpu_limit_strict_rejection(
     manager: SandboxManager, workspace: Path, caps: object
 ) -> None:
     """If cpu_limit is requested in STRICT mode but not SUPPORTED, it must be rejected."""
+    if getattr(caps, "filesystem_isolation", "NOT_AVAILABLE") != "SUPPORTED":
+        pytest.skip(
+            "Cannot test cpu_limit strict rejection because filesystem_isolation fails first"
+        )
+
     status = getattr(caps, "cpu_limit", "NOT_AVAILABLE")
     if status == "SUPPORTED":
         pytest.skip("cpu_limit is SUPPORTED on this platform, cannot test rejection")
