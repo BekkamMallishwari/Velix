@@ -81,4 +81,5 @@ jobs:
 
     - name: Run Mypy
       run: |
-        mypy src/velix_agent/sandbox/ tests/unit/test_sandbox_windows.py
+        mypy src/velix_agent/sandbox/ tests/unit/test_sandbox_windows.py --exclude "backends/(linux|macos)\.py$"
+
