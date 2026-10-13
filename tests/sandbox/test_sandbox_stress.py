@@ -128,7 +128,10 @@ def test_stress_timeout_under_cpu_load(
     #   -SIGXCPU (-24 on macOS/Linux) = CPU rlimit
     #   -SIGKILL (-9) = killpg
     # On Windows the backend returns -1 for all timeout kills.
-    valid_killed = {-1, -signal.SIGKILL}
+    valid_killed = {-1}
+    with_sigkill = getattr(signal, "SIGKILL", None)
+    if with_sigkill is not None:
+        valid_killed.add(-with_sigkill)
     with_sigxcpu = getattr(signal, "SIGXCPU", None)
     if with_sigxcpu is not None:
         valid_killed.add(-with_sigxcpu)
