@@ -121,3 +121,43 @@ def test_sandbox_disk_limit_unsupported() -> None:
     # We explicitly verify that NO backend falsely claims disk_limit support
     # since we don't have a true quota enforcement mechanism implemented.
     assert caps.disk_limit == "UNSUPPORTED"
+
+
+def test_sandbox_policy_timeout_synchronization(tmp_path: Path) -> None:
+    from velix_agent.sandbox.backends.base import SandboxBackend
+    from velix_agent.sandbox.policy import SandboxCapabilities, SandboxPolicy
+    from velix_agent.sandbox.result import SandboxResult
+
+    captured_policy: SandboxPolicy | None = None
+
+    class MockBackend(SandboxBackend):
+        @classmethod
+        def get_capabilities(cls) -> SandboxCapabilities:
+            return SandboxCapabilities(
+                filesystem_isolation="SUPPORTED",
+                network_isolation="SUPPORTED",
+                cpu_limit="SUPPORTED",
+                memory_limit="SUPPORTED",
+                process_limit="SUPPORTED",
+                timeout="SUPPORTED",
+                output_limit="SUPPORTED",
+                secret_filtering="SUPPORTED",
+                disk_limit="UNSUPPORTED",
+                runtime_isolation="UNSUPPORTED",
+                observability="UNSUPPORTED",
+                security_hardening="UNSUPPORTED",
+            )
+
+        def execute(
+            self, command: list[str], policy: SandboxPolicy, timeout: int = 30
+        ) -> SandboxResult:
+            nonlocal captured_policy
+            captured_policy = policy
+            return SandboxResult(stdout="", stderr="", exit_code=0, command=command)
+
+    manager = SandboxManager(backend=MockBackend())
+    manager.execute(["echo", "hi"], tmp_path, timeout=42)
+
+    assert captured_policy is not None
+    assert captured_policy.max_execution_time == 42
+

@@ -117,6 +117,9 @@ def test_stress_timeout_under_cpu_load(
         [sys.executable, "-c", "while True: pass"],
         workspace_root=workspace,
         timeout=sandbox_timeout,
+        mode="BALANCED",
+        allow_network=True,
+        cpu_limit=False,
     )
     elapsed = time.monotonic() - t0
 
@@ -171,6 +174,8 @@ def test_stress_bounded_memory_allocation(
         workspace_root=workspace,
         timeout=_OUTER_TIMEOUT_SEC,
         memory_limit=limit_bytes,
+        mode="BALANCED",
+        allow_network=True,
     )
     elapsed = time.monotonic() - t0
 
@@ -220,6 +225,8 @@ def test_stress_bounded_child_processes(
         workspace_root=workspace,
         timeout=_OUTER_TIMEOUT_SEC,
         process_limit=proc_limit,
+        mode="BALANCED",
+        allow_network=True,
     )
     elapsed = time.monotonic() - t0
 
@@ -255,6 +262,8 @@ def test_stress_large_stdout_is_truncated(
         [sys.executable, "-c", code],
         workspace_root=workspace,
         timeout=_OUTER_TIMEOUT_SEC,
+        mode="BALANCED",
+        allow_network=True,
     )
     elapsed = time.monotonic() - t0
 
@@ -281,6 +290,8 @@ def test_stress_large_stderr_is_truncated(
         [sys.executable, "-c", code],
         workspace_root=workspace,
         timeout=_OUTER_TIMEOUT_SEC,
+        mode="BALANCED",
+        allow_network=True,
     )
     elapsed = time.monotonic() - t0
 

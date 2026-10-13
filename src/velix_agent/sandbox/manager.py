@@ -155,6 +155,7 @@ class SandboxManager:
             workspace_root=root,
             mode=policy_mode,
             allow_network=allow_network,
+            max_execution_time=timeout,
             secrets=list(secrets.keys()) if secrets else [],
             memory_limit=memory_limit,
             process_limit=process_limit,
