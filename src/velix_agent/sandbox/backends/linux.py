@@ -45,14 +45,18 @@ class LinuxSandboxBackend(SandboxBackend):
                             "--user",
                             "--scope",
                             "-q",
+                            "--no-ask-password",
                             "--property=MemoryMax=100M",
                             "--property=TasksMax=10",
                             "true",
                         ],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        timeout=2,
                     )
                     cls._systemd_supported_cache = res.returncode == 0
+                except (OSError, subprocess.TimeoutExpired):
+                    cls._systemd_supported_cache = False
                 except Exception:
                     cls._systemd_supported_cache = False
         return bool(cls._systemd_supported_cache)
@@ -135,16 +139,20 @@ class LinuxSandboxBackend(SandboxBackend):
 
     @staticmethod
     def _read_stream(
-        stream: typing.IO[bytes], chunks_list: list[bytes], truncated_flag: list[bool]
+        stream: typing.IO[bytes],
+        chunks_list: list[bytes],
+        truncated_flag: list[bool],
+        max_bytes: int = 50_000,
     ) -> None:
         total_bytes = 0
+        read_fn = getattr(stream, "read1", stream.read)
         while True:
-            chunk = stream.read(4096)
+            chunk = read_fn(4096)
             if not chunk:
                 break
 
-            if total_bytes < LinuxSandboxBackend.MAX_OUTPUT_BYTES:
-                remaining = LinuxSandboxBackend.MAX_OUTPUT_BYTES - total_bytes
+            if total_bytes < max_bytes:
+                remaining = max_bytes - total_bytes
                 chunks_list.append(chunk[:remaining])
                 total_bytes += len(chunk)
                 if len(chunk) > remaining:
@@ -157,6 +165,11 @@ class LinuxSandboxBackend(SandboxBackend):
     ) -> SandboxResult:
         if platform.system() != "Linux":
             raise SandboxError("LinuxSandboxBackend is only available on Linux.")
+
+        if policy.max_output_size < 0:
+            raise SandboxError(
+                f"max_output_size must be non-negative, got {policy.max_output_size}"
+            )
 
         bwrap_path = shutil.which("bwrap")
         if not bwrap_path:
@@ -405,6 +418,7 @@ class LinuxSandboxBackend(SandboxBackend):
                 "--user",
                 "--scope",
                 "-q",
+                "--no-ask-password",
                 f"--unit={scope_name}",
                 "--property=CollectMode=inactive-or-failed",
             ]
@@ -463,10 +477,12 @@ class LinuxSandboxBackend(SandboxBackend):
             stderr_truncated = [False]
 
             out_thread = threading.Thread(
-                target=self._read_stream, args=(process.stdout, stdout_chunks, stdout_truncated)
+                target=self._read_stream,
+                args=(process.stdout, stdout_chunks, stdout_truncated, policy.max_output_size),
             )
             err_thread = threading.Thread(
-                target=self._read_stream, args=(process.stderr, stderr_chunks, stderr_truncated)
+                target=self._read_stream,
+                args=(process.stderr, stderr_chunks, stderr_truncated, policy.max_output_size),
             )
             out_thread.daemon = True
             err_thread.daemon = True
@@ -478,12 +494,31 @@ class LinuxSandboxBackend(SandboxBackend):
                 process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 timeout_expired = True
+                # Note: os.killpg signals the process group leader. Descendant
+                # processes that detach into a separate session or process group
+                # may escape this signal. Bubblewrap's PID namespace and systemd
+                # scope teardown in finally provide subsequent process cleanup.
                 with contextlib.suppress(Exception):
                     os.killpg(process.pid, signal.SIGKILL)  # type: ignore[attr-defined]
-                process.wait()
+                try:
+                    process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(Exception):
+                        process.kill()
+                    with contextlib.suppress(Exception):
+                        process.wait(timeout=1.0)
 
-            out_thread.join()
-            err_thread.join()
+            # Bound thread joins to avoid indefinite hangs if surviving or
+            # detached descendants retain inherited pipe write handles.
+            out_thread.join(timeout=1.0)
+            err_thread.join(timeout=1.0)
+
+            with contextlib.suppress(Exception):
+                if not out_thread.is_alive() and process.stdout:
+                    process.stdout.close()
+            with contextlib.suppress(Exception):
+                if not err_thread.is_alive() and process.stderr:
+                    process.stderr.close()
 
             stdout_bytes = b"".join(stdout_chunks)
             stderr_bytes = b"".join(stderr_chunks)
@@ -598,12 +633,29 @@ class LinuxSandboxBackend(SandboxBackend):
             if scope_name:
                 with contextlib.suppress(Exception):
                     subprocess.run(
-                        ["systemctl", "--user", "kill", "--kill-who=all", scope_name],
+                        [
+                            "systemctl",
+                            "--user",
+                            "--no-ask-password",
+                            "kill",
+                            "--kill-who=all",
+                            "--signal=SIGKILL",
+                            scope_name,
+                        ],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        timeout=5,
                     )
+                with contextlib.suppress(Exception):
                     subprocess.run(
-                        ["systemctl", "--user", "stop", scope_name],
+                        [
+                            "systemctl",
+                            "--user",
+                            "--no-ask-password",
+                            "stop",
+                            scope_name,
+                        ],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        timeout=5,
                     )

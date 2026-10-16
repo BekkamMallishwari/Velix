@@ -37,9 +37,15 @@ class SandboxPolicy:
     allow_network: bool = False
     max_execution_time: int = 30
     max_output_size: int = 50_000
-    cpu_limit: bool = True
+    cpu_limit: bool = False
     memory_limit: int | None = None
     process_limit: int | None = None
     secret_filtering: bool = True
     secrets: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.max_output_size < 0:
+            raise ValueError(
+                f"max_output_size must be non-negative, got {self.max_output_size}"
+            )

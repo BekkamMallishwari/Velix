@@ -1,5 +1,6 @@
 import os
 import platform
+import shutil
 import sys
 import typing
 from pathlib import Path
@@ -12,8 +13,8 @@ from velix_agent.sandbox.policy import SandboxPolicy
 
 @pytest.fixture
 def macos_backend() -> MacOSSandboxBackend:
-    if platform.system() != "Darwin":
-        pytest.skip("macOS specific test")
+    if platform.system() != "Darwin" or not shutil.which("sandbox-exec"):
+        pytest.skip("macOS sandbox-exec not available")
     return MacOSSandboxBackend()
 
 
@@ -67,10 +68,72 @@ def test_sandbox_outside_workspace_blocked(
     read_res = macos_backend.execute(["cat", "/etc/hosts"], policy)
     assert read_res.exit_code != 0
 
-    # Wait, /tmp is now explicitly allowed!
-    # Let's test a directory that is NOT allowed like /Users or /etc
-    write_res2 = macos_backend.execute(["touch", "/etc/sandbox_outside_test.txt"], policy)
-    assert write_res2.exit_code != 0
+    write_res = macos_backend.execute(["touch", "/etc/sandbox_outside_test.txt"], policy)
+    assert write_res.exit_code != 0
+
+
+def test_sandbox_tmp_outside_workspace_blocked(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
+    # Regression test for /tmp isolation: verify that files in /tmp outside
+    # the workspace cannot be read or written to from the sandbox.
+    outside_tmp = Path("/tmp") / f"velix_test_outside_{os.getpid()}.txt"
+    try:
+        outside_tmp.write_text("secret_tmp_content")
+        read_res = macos_backend.execute(["cat", outside_tmp.as_posix()], policy)
+        assert read_res.exit_code != 0
+        assert "secret_tmp_content" not in read_res.stdout
+
+        write_res = macos_backend.execute(
+            ["touch", f"/tmp/velix_test_write_{os.getpid()}.txt"], policy
+        )
+        assert write_res.exit_code != 0
+    finally:
+        outside_tmp.unlink(missing_ok=True)
+
+
+def test_sandbox_symlink_escape_tmp_blocked(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
+    # Regression test for symlink escape: a symlink inside the workspace
+    # pointing to a file in /tmp outside the workspace must not permit reading.
+    outside_tmp = Path("/tmp") / f"velix_test_symlink_outside_{os.getpid()}.txt"
+    symlink_in_ws = policy.workspace_root / f"escape_link_{os.getpid()}"
+    try:
+        outside_tmp.write_text("symlink_secret")
+        os.symlink(str(outside_tmp), str(symlink_in_ws))
+        res = macos_backend.execute(["cat", symlink_in_ws.name], policy)
+        assert res.exit_code != 0
+        assert "symlink_secret" not in res.stdout
+    finally:
+        symlink_in_ws.unlink(missing_ok=True)
+        outside_tmp.unlink(missing_ok=True)
+
+
+def test_sandbox_profile_does_not_contain_blanket_tmp(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
+    profile = macos_backend._generate_profile(policy)
+    assert '(subpath "/tmp")' not in profile
+    assert '(subpath "/private/tmp")' not in profile
+
+
+def test_sandbox_profile_path_escaping(macos_backend: MacOSSandboxBackend) -> None:
+    """Verify that special characters in paths are properly escaped for Seatbelt profiles."""
+    raw = '/path/with/"quotes"\\and\nnewlines\r'
+    escaped = MacOSSandboxBackend._escape_seatbelt_path(raw)
+    assert '"' not in escaped.replace('\\"', "")
+    assert "\n" not in escaped
+    assert "\r" not in escaped
+    assert '\\"' in escaped
+    assert "\\\\" in escaped
+
+    # Verify that a policy with unusual workspace characters produces escaped rules
+    weird_ws = Path('/tmp/velix "inject" test')
+    weird_policy = SandboxPolicy(workspace_root=weird_ws)
+    profile = macos_backend._generate_profile(weird_policy)
+    assert 'velix \\"inject\\" test' in profile
+    assert 'velix "inject" test' not in profile
 
 
 def test_sandbox_ssh_aws_blocked(macos_backend: MacOSSandboxBackend, policy: SandboxPolicy) -> None:
@@ -142,6 +205,9 @@ def test_sandbox_cpu_limit(macos_backend: MacOSSandboxBackend, policy: SandboxPo
     import signal
     import sys
 
+    # Enable CPU limit explicitly on policy
+    policy.cpu_limit = True
+
     # A tight infinite loop. It should be killed by SIGXCPU (-24) on macOS.
     cmd = [sys.executable, "-c", "while True: pass"]
     # We use a short timeout for the test to run fast
@@ -153,6 +219,85 @@ def test_sandbox_cpu_limit(macos_backend: MacOSSandboxBackend, policy: SandboxPo
     # Since timeout is 1s and CPU limit is 1s, it's a race, but either is a forced kill.
     # However, SIGXCPU is specifically what we want to demonstrate works.
     assert res.exit_code in (-signal.SIGXCPU, -signal.SIGKILL, -1)
+
+
+def test_macos_cpu_limit_rlimit_enforcement(
+    macos_backend: MacOSSandboxBackend, workspace_root: Path
+) -> None:
+    """Verify that macOS applies RLIMIT_CPU when policy.cpu_limit=True and not when False."""
+    code = "import resource; print(resource.getrlimit(resource.RLIMIT_CPU)[0])"
+
+    # 1. cpu_limit=False (default): RLIMIT_CPU must not be set to timeout
+    policy_no_limit = SandboxPolicy(
+        workspace_root=workspace_root, cpu_limit=False, allow_network=False
+    )
+    res_no_limit = macos_backend.execute(
+        [sys.executable, "-c", code], policy_no_limit, timeout=10
+    )
+    assert res_no_limit.exit_code == 0
+    cur_limit = int(res_no_limit.stdout.strip())
+    # Should be default/unlimited, not the 10-second timeout
+    assert cur_limit != 10
+    assert cur_limit >= 1000
+
+    # 2. cpu_limit=True: RLIMIT_CPU must be set to timeout
+    policy_with_limit = SandboxPolicy(
+        workspace_root=workspace_root, cpu_limit=True, allow_network=False
+    )
+    res_with_limit = macos_backend.execute(
+        [sys.executable, "-c", code], policy_with_limit, timeout=10
+    )
+    assert res_with_limit.exit_code == 0
+    assert int(res_with_limit.stdout.strip()) == 10
+
+
+def test_macos_backend_preexec_rlimit_invocation(workspace_root: Path) -> None:
+    """Verify that set_limits calls resource.setrlimit only when policy.cpu_limit is True."""
+    backend = MacOSSandboxBackend()
+    import resource
+    from unittest.mock import MagicMock, patch
+
+    captured_preexec_fns: list[typing.Any] = []
+
+    def mock_popen(*args: typing.Any, **kwargs: typing.Any) -> MagicMock:
+        captured_preexec_fns.append(kwargs.get("preexec_fn"))
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_proc.returncode = 0
+        mock_proc.stdout = None
+        mock_proc.stderr = None
+        mock_proc.wait.return_value = 0
+        return mock_proc
+
+    # Case 1: cpu_limit=False (default)
+    pol_false = SandboxPolicy(workspace_root=workspace_root, cpu_limit=False)
+    with patch("platform.system", return_value="Darwin"), \
+         patch("subprocess.Popen", side_effect=mock_popen), \
+         patch.object(MacOSSandboxBackend, "_read_stream"):
+        backend.execute(["echo", "hi"], pol_false, timeout=10)
+
+    assert len(captured_preexec_fns) == 1
+    preexec_false = captured_preexec_fns[0]
+    assert preexec_false is not None
+    with patch("os.setpgrp"), patch("resource.setrlimit") as mock_setrlimit:
+        preexec_false()
+        mock_setrlimit.assert_not_called()
+
+    # Case 2: cpu_limit=True
+    captured_preexec_fns.clear()
+    pol_true = SandboxPolicy(workspace_root=workspace_root, cpu_limit=True)
+    with patch("platform.system", return_value="Darwin"), \
+         patch("subprocess.Popen", side_effect=mock_popen), \
+         patch.object(MacOSSandboxBackend, "_read_stream"):
+        backend.execute(["echo", "hi"], pol_true, timeout=10)
+
+    assert len(captured_preexec_fns) == 1
+    preexec_true = captured_preexec_fns[0]
+    assert preexec_true is not None
+    with patch("os.setpgrp"), patch("resource.setrlimit") as mock_setrlimit:
+        preexec_true()
+        mock_setrlimit.assert_called_once_with(resource.RLIMIT_CPU, (10, 10))
+
 
 
 def test_sandbox_process_limit_unsupported(
@@ -194,3 +339,48 @@ def test_sandbox_runaway_child(macos_backend: MacOSSandboxBackend, policy: Sandb
     # To avoid matching our own pgrep command, we use [t]ime.sleep(10.12345)
     pgrep_res = subprocess.run(["pgrep", "-f", "[t]ime.sleep(10.12345)"], capture_output=True)
     assert pgrep_res.returncode != 0, "Runaway child survived the sandbox termination!"
+
+
+def test_macos_detached_child_cleanup_on_timeout(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
+    """Verify that a child attempting to detach with setsid() is terminated on timeout."""
+    import signal
+    import sys
+    import time
+
+    pid_file = policy.workspace_root / f"detached_{os.getpid()}.pid"
+    script = (
+        "import os, time, sys\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        "    os.setsid()\n"
+        f"    with open({str(pid_file)!r}, 'w') as f:\n"
+        "        f.write(str(os.getpid()))\n"
+        "    time.sleep(20)\n"
+        "    sys.exit(0)\n"
+        "time.sleep(20)\n"
+    )
+
+    t0 = time.time()
+    res = macos_backend.execute([sys.executable, "-c", script], policy, timeout=1)
+    elapsed = time.time() - t0
+
+    assert res.exit_code == -1
+    assert elapsed < 5.0
+    assert pid_file.exists()
+
+    child_pid = int(pid_file.read_text().strip())
+    pid_file.unlink(missing_ok=True)
+
+    time.sleep(0.5)
+    try:
+        os.kill(child_pid, 0)
+        alive = True
+    except OSError:
+        alive = False
+
+    if alive:
+        os.kill(child_pid, signal.SIGKILL)
+
+    assert not alive, "Detached setsid() child survived timeout termination!"

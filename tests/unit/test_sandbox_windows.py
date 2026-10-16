@@ -1,4 +1,6 @@
+import io
 import platform
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -193,3 +195,282 @@ def test_cross_platform_import() -> None:
         # This is enough to verify it doesn't crash on import/instantiation
     except Exception as e:
         pytest.fail(f"Importing Windows backend failed: {e}")
+
+
+# ===========================================================================
+# Focused Mocked Tests for Win32 Cleanup Calls
+# Note: Mocked tests do not replace native Windows CI.
+# ===========================================================================
+
+
+def _mock_win_process(
+    stdout_data: bytes = b"output\n",
+    stderr_data: bytes = b"",
+    returncode: int = 0,
+) -> MagicMock:
+    proc = MagicMock()
+    proc._handle = 1234
+    proc.stdout = io.BytesIO(stdout_data)
+    proc.stderr = io.BytesIO(stderr_data)
+    proc.returncode = returncode
+    proc.poll.return_value = returncode
+    proc.wait.return_value = returncode
+    return proc
+
+
+def test_windows_cleanup_successful_calls(tmp_path: Path) -> None:
+    """Verify successful Win32 cleanup calls and exit code preservation."""
+    backend = WindowsSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+    mock_proc = _mock_win_process(stdout_data=b"hello windows\n", returncode=0)
+
+    with (
+        patch("platform.system", return_value="Windows"),
+        patch("velix_agent.sandbox.backends.windows.CreateJobObjectW", return_value=1000),
+        patch("velix_agent.sandbox.backends.windows.SetInformationJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.AssignProcessToJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.NtResumeProcess", return_value=0),
+        patch(
+            "velix_agent.sandbox.backends.windows.TerminateJobObject", return_value=True
+        ) as mock_term,
+        patch("velix_agent.sandbox.backends.windows.CloseHandle", return_value=True) as mock_close,
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("velix_agent.sandbox.backends.windows.logger.warning") as mock_warn,
+    ):
+        result = backend.execute(["cmd.exe", "/c", "echo hello"], policy)
+
+    assert result.exit_code == 0
+    assert "hello windows" in result.stdout
+    assert mock_term.called
+    assert mock_close.called
+    mock_close.assert_called_with(1000)
+    mock_warn.assert_not_called()
+
+
+def test_windows_cleanup_terminate_failure_in_execution_observable(tmp_path: Path) -> None:
+    """Verify failed TerminateJobObject in execution path captures error and raises."""
+    backend = WindowsSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+    mock_proc = _mock_win_process(returncode=0)
+
+    with (
+        patch("platform.system", return_value="Windows"),
+        patch("velix_agent.sandbox.backends.windows.CreateJobObjectW", return_value=1000),
+        patch("velix_agent.sandbox.backends.windows.SetInformationJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.AssignProcessToJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.NtResumeProcess", return_value=0),
+        patch(
+            "velix_agent.sandbox.backends.windows.TerminateJobObject", return_value=False
+        ),
+        patch("velix_agent.sandbox.backends.windows.CloseHandle", return_value=True) as mock_close,
+        patch(
+            "velix_agent.sandbox.backends.windows.ctypes.GetLastError",
+            return_value=5,
+            create=True,
+        ),
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("velix_agent.sandbox.backends.windows.logger.warning") as mock_warn,
+    ):
+        with pytest.raises(SandboxError) as exc_info:
+            backend.execute(["cmd.exe", "/c", "echo hello"], policy)
+
+        # Do not silently treat failed termination as successful cleanup
+        assert "Failed to terminate Job Object" in str(exc_info.value)
+        assert "5" in str(exc_info.value)
+
+        # Failure is observable via warning log
+        assert mock_warn.called
+        assert any(
+            "TerminateJobObject" in str(call) and "5" in str(call)
+            for call in mock_warn.call_args_list
+        )
+
+        # CloseHandle is still executed to ensure resources are not leaked
+        assert mock_close.called
+
+
+def test_windows_cleanup_terminate_failure_on_timeout_observable(tmp_path: Path) -> None:
+    """Verify failed TerminateJobObject after timeout captures error, emits warning, and raises."""
+    backend = WindowsSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+    mock_proc = _mock_win_process()
+    mock_proc.wait.side_effect = subprocess.TimeoutExpired(cmd=["sleep"], timeout=1)
+
+    with (
+        patch("platform.system", return_value="Windows"),
+        patch("velix_agent.sandbox.backends.windows.CreateJobObjectW", return_value=1000),
+        patch("velix_agent.sandbox.backends.windows.SetInformationJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.AssignProcessToJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.NtResumeProcess", return_value=0),
+        patch(
+            "velix_agent.sandbox.backends.windows.TerminateJobObject", return_value=False
+        ),
+        patch("velix_agent.sandbox.backends.windows.CloseHandle", return_value=True) as mock_close,
+        patch(
+            "velix_agent.sandbox.backends.windows.ctypes.GetLastError",
+            return_value=5,
+            create=True,
+        ),
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("velix_agent.sandbox.backends.windows.logger.warning") as mock_warn,
+    ):
+        with pytest.raises(SandboxError) as exc_info:
+            backend.execute(["sleep"], policy, timeout=1)
+
+        assert "Failed to terminate Job Object after timeout" in str(exc_info.value)
+        assert "5" in str(exc_info.value)
+        assert mock_warn.called
+        assert mock_close.called
+
+
+def test_windows_cleanup_terminate_failure_in_cleanup_observable(tmp_path: Path) -> None:
+    """Verify failed TerminateJobObject in cleanup block is observable and raises."""
+    backend = WindowsSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+    mock_proc = _mock_win_process(returncode=0)
+
+    # Execution path succeeds (return True), cleanup path fails (return False)
+    with (
+        patch("platform.system", return_value="Windows"),
+        patch("velix_agent.sandbox.backends.windows.CreateJobObjectW", return_value=1000),
+        patch("velix_agent.sandbox.backends.windows.SetInformationJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.AssignProcessToJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.NtResumeProcess", return_value=0),
+        patch(
+            "velix_agent.sandbox.backends.windows.TerminateJobObject", side_effect=[True, False]
+        ),
+        patch("velix_agent.sandbox.backends.windows.CloseHandle", return_value=True) as mock_close,
+        patch(
+            "velix_agent.sandbox.backends.windows.ctypes.GetLastError",
+            return_value=5,
+            create=True,
+        ),
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("velix_agent.sandbox.backends.windows.logger.warning") as mock_warn,
+    ):
+        with pytest.raises(SandboxError) as exc_info:
+            backend.execute(["cmd.exe", "/c", "echo hello"], policy)
+
+        assert "Failed to terminate Job Object during cleanup" in str(exc_info.value)
+        assert "5" in str(exc_info.value)
+        assert mock_warn.called
+        assert mock_close.called
+
+
+def test_windows_cleanup_close_handle_failure_observable(tmp_path: Path) -> None:
+    """Verify failed CloseHandle captures error, emits warning, and raises SandboxError."""
+    backend = WindowsSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+    mock_proc = _mock_win_process(returncode=0)
+
+    with (
+        patch("platform.system", return_value="Windows"),
+        patch("velix_agent.sandbox.backends.windows.CreateJobObjectW", return_value=1000),
+        patch("velix_agent.sandbox.backends.windows.SetInformationJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.AssignProcessToJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.NtResumeProcess", return_value=0),
+        patch("velix_agent.sandbox.backends.windows.TerminateJobObject", return_value=True),
+        patch(
+            "velix_agent.sandbox.backends.windows.CloseHandle", return_value=False
+        ) as mock_close,
+        patch(
+            "velix_agent.sandbox.backends.windows.ctypes.GetLastError",
+            return_value=6,
+            create=True,
+        ),
+        patch("subprocess.Popen", return_value=mock_proc),
+        patch("velix_agent.sandbox.backends.windows.logger.warning") as mock_warn,
+    ):
+        with pytest.raises(SandboxError) as exc_info:
+            backend.execute(["cmd.exe", "/c", "echo hello"], policy)
+
+        assert "Failed to close Job Object handle" in str(exc_info.value)
+        assert "6" in str(exc_info.value)
+        assert mock_close.called
+        assert mock_warn.called
+        assert any(
+            "CloseHandle" in str(call) and "6" in str(call)
+            for call in mock_warn.call_args_list
+        )
+
+
+def test_windows_cleanup_failure_does_not_mask_execution_exception(tmp_path: Path) -> None:
+    """Verify cleanup failures do not mask original execution exceptions."""
+    backend = WindowsSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+
+    with (
+        patch("platform.system", return_value="Windows"),
+        patch("velix_agent.sandbox.backends.windows.CreateJobObjectW", return_value=1000),
+        patch("velix_agent.sandbox.backends.windows.SetInformationJobObject", return_value=True),
+        patch("subprocess.Popen", side_effect=RuntimeError("Subprocess launch crashed")),
+        patch("velix_agent.sandbox.backends.windows.TerminateJobObject", return_value=False),
+        patch("velix_agent.sandbox.backends.windows.CloseHandle", return_value=False),
+        patch(
+            "velix_agent.sandbox.backends.windows.ctypes.GetLastError",
+            return_value=6,
+            create=True,
+        ),
+        patch("velix_agent.sandbox.backends.windows.logger.warning") as mock_warn,
+    ):
+        with pytest.raises(SandboxError) as exc_info:
+            backend.execute(["invalid_command.exe"], policy)
+
+        # Original execution error must NOT be masked
+        assert "Subprocess launch crashed" in str(exc_info.value)
+        assert exc_info.value.__cause__ is not None
+        assert "Subprocess launch crashed" in str(exc_info.value.__cause__)
+
+        # Warnings for cleanup failures must still be emitted
+        assert mock_warn.called
+
+
+def test_windows_timeout_preserves_exit_code_and_behavior(tmp_path: Path) -> None:
+    """Verify timeout behavior is preserved with exit code -1 and Command timed out stderr."""
+    backend = WindowsSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+    mock_proc = _mock_win_process()
+    mock_proc.wait.side_effect = subprocess.TimeoutExpired(cmd=["sleep"], timeout=1)
+
+    with (
+        patch("platform.system", return_value="Windows"),
+        patch("velix_agent.sandbox.backends.windows.CreateJobObjectW", return_value=1000),
+        patch("velix_agent.sandbox.backends.windows.SetInformationJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.AssignProcessToJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.NtResumeProcess", return_value=0),
+        patch(
+            "velix_agent.sandbox.backends.windows.TerminateJobObject", return_value=True
+        ) as mock_term,
+        patch("velix_agent.sandbox.backends.windows.CloseHandle", return_value=True),
+        patch("subprocess.Popen", return_value=mock_proc),
+    ):
+        result = backend.execute(["sleep"], policy, timeout=1)
+
+    assert result.exit_code == -1
+    assert "Command timed out" in result.stderr
+    mock_term.assert_any_call(1000, 1)
+
+
+def test_windows_non_zero_exit_code_preserved(tmp_path: Path) -> None:
+    """Verify existing exit-code behavior is preserved for non-zero process exits."""
+    backend = WindowsSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+    mock_proc = _mock_win_process(stdout_data=b"failed\n", returncode=42)
+
+    with (
+        patch("platform.system", return_value="Windows"),
+        patch("velix_agent.sandbox.backends.windows.CreateJobObjectW", return_value=1000),
+        patch("velix_agent.sandbox.backends.windows.SetInformationJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.AssignProcessToJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.NtResumeProcess", return_value=0),
+        patch(
+            "velix_agent.sandbox.backends.windows.TerminateJobObject", return_value=True
+        ) as mock_term,
+        patch("velix_agent.sandbox.backends.windows.CloseHandle", return_value=True),
+        patch("subprocess.Popen", return_value=mock_proc),
+    ):
+        result = backend.execute(["exit42.exe"], policy)
+
+    assert result.exit_code == 42
+    assert "failed" in result.stdout
+    mock_term.assert_any_call(1000, 0)

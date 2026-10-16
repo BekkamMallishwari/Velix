@@ -34,8 +34,33 @@ class MacOSSandboxBackend(SandboxBackend):
             security_hardening="UNSUPPORTED",
         )
 
+    @staticmethod
+    def _escape_seatbelt_path(path: str) -> str:
+        """Escape special characters in a path for Seatbelt scheme profile literals.
+
+        In Seatbelt S-expressions, string literals are enclosed in double quotes.
+        Backslashes and double quotes must be escaped. Control characters like newlines
+        must be removed to prevent breaking out of string literals or rule injection.
+        """
+        return path.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "").replace("\r", "")
+
     def _generate_profile(self, policy: SandboxPolicy) -> str:
-        home = os.environ.get("HOME", "/tmp")
+        home = os.environ.get("HOME", policy.workspace_root.as_posix())
+        home_paths = {home, os.path.realpath(home)}
+
+        deny_rules = [
+            '    (literal "/etc/passwd")',
+            '    (literal "/private/etc/passwd")',
+            '    (literal "/private/etc/master.passwd")',
+        ]
+        for h in sorted(home_paths):
+            escaped_h = self._escape_seatbelt_path(h)
+            deny_rules.extend([
+                f'    (subpath "{escaped_h}/.ssh")',
+                f'    (subpath "{escaped_h}/.aws")',
+                f'    (subpath "{escaped_h}/.config")',
+            ])
+
         profile = [
             "(version 1)",
             "(deny default)",
@@ -44,12 +69,7 @@ class MacOSSandboxBackend(SandboxBackend):
             "(allow process-fork)",
             "(allow file-read-metadata)",
             "(deny file-read*",
-            '    (literal "/etc/passwd")',
-            '    (literal "/private/etc/passwd")',
-            '    (literal "/private/etc/master.passwd")',
-            f'    (subpath "{home}/.ssh")',
-            f'    (subpath "{home}/.aws")',
-            f'    (subpath "{home}/.config")',
+            *deny_rules,
             ")",
         ]
 
@@ -63,11 +83,16 @@ class MacOSSandboxBackend(SandboxBackend):
 
         import sys
 
-        base_prefix = os.path.realpath(sys.base_prefix)
-        prefix = os.path.realpath(sys.prefix)
-        profile.append(f'    (subpath "{base_prefix}")')
-        if prefix != base_prefix:
-            profile.append(f'    (subpath "{prefix}")')
+        prefixes = {
+            sys.base_prefix,
+            os.path.realpath(sys.base_prefix),
+            sys.prefix,
+            os.path.realpath(sys.prefix),
+        }
+        for p in sorted(prefixes):
+            escaped_p = self._escape_seatbelt_path(p)
+            profile.append(f'    (subpath "{escaped_p}")')
+
         profile.append('    (subpath "/private/etc/ssl")')
         profile.append('    (subpath "/etc/ssl")')
         profile.append('    (literal "/dev/urandom")')
@@ -75,15 +100,19 @@ class MacOSSandboxBackend(SandboxBackend):
         profile.append(")")
 
         profile.append("(allow file-read* file-write*")
-        profile.append('    (subpath "/tmp")')
-        profile.append('    (subpath "/private/tmp")')
         profile.append('    (literal "/dev/null")')
         profile.append('    (literal "/dev/zero")')
         profile.append(")")
 
-        workspace_path = policy.workspace_root.resolve().as_posix()
-        profile.append(f'(allow file-read* file-write* (subpath "{workspace_path}"))')
-        profile.append(f'(deny file-read* file-write* (subpath "{workspace_path}/.git"))')
+        workspace_resolved = policy.workspace_root.resolve().as_posix()
+        escaped_resolved = self._escape_seatbelt_path(workspace_resolved)
+        profile.append(f'(allow file-read* file-write* (subpath "{escaped_resolved}"))')
+        profile.append(f'(deny file-read* file-write* (subpath "{escaped_resolved}/.git"))')
+        workspace_raw = policy.workspace_root.as_posix()
+        if workspace_raw != workspace_resolved:
+            escaped_raw = self._escape_seatbelt_path(workspace_raw)
+            profile.append(f'(allow file-read* file-write* (subpath "{escaped_raw}"))')
+            profile.append(f'(deny file-read* file-write* (subpath "{escaped_raw}/.git"))')
 
         if not policy.allow_network:
             profile.append("(deny network*)")
@@ -94,16 +123,20 @@ class MacOSSandboxBackend(SandboxBackend):
 
     @staticmethod
     def _read_stream(
-        stream: typing.IO[bytes], chunks_list: list[bytes], truncated_flag: list[bool]
+        stream: typing.IO[bytes],
+        chunks_list: list[bytes],
+        truncated_flag: list[bool],
+        max_bytes: int = 50_000,
     ) -> None:
         total_bytes = 0
+        read_fn = getattr(stream, "read1", stream.read)
         while True:
-            chunk = stream.read(4096)
+            chunk = read_fn(4096)
             if not chunk:
                 break
 
-            if total_bytes < MacOSSandboxBackend.MAX_OUTPUT_BYTES:
-                remaining = MacOSSandboxBackend.MAX_OUTPUT_BYTES - total_bytes
+            if total_bytes < max_bytes:
+                remaining = max_bytes - total_bytes
                 chunks_list.append(chunk[:remaining])
                 total_bytes += len(chunk)
                 if len(chunk) > remaining:
@@ -117,6 +150,11 @@ class MacOSSandboxBackend(SandboxBackend):
         if platform.system() != "Darwin":
             raise SandboxError("MacOSSandboxBackend is only available on macOS.")
 
+        if policy.max_output_size < 0:
+            raise SandboxError(
+                f"max_output_size must be non-negative, got {policy.max_output_size}"
+            )
+
         profile_content = self._generate_profile(policy)
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".sb", delete=False) as f:
@@ -127,8 +165,9 @@ class MacOSSandboxBackend(SandboxBackend):
             # CPU Limit: Process receives SIGXCPU if it uses more than `timeout` seconds.
             # We use preexec_fn as it is the only practical mechanism on macOS to enforce
             # RLIMIT_CPU on the child before execve.
-            with contextlib.suppress(Exception):
-                resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))  # type: ignore[attr-defined]
+            if policy.cpu_limit:
+                with contextlib.suppress(Exception):
+                    resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))  # type: ignore[attr-defined]
 
             # Note on Process Limits (RLIMIT_NPROC):
             # RLIMIT_NPROC is per-user on macOS. Enforcing a low limit here restricts the
@@ -144,7 +183,7 @@ class MacOSSandboxBackend(SandboxBackend):
         try:
             env = {
                 "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
-                "HOME": os.environ.get("HOME", "/tmp"),
+                "HOME": os.environ.get("HOME", policy.workspace_root.as_posix()),
                 "USER": os.environ.get("USER", "nobody"),
             }
             env.update(policy.env)
@@ -169,27 +208,77 @@ class MacOSSandboxBackend(SandboxBackend):
             stderr_truncated = [False]
 
             out_thread = threading.Thread(
-                target=self._read_stream, args=(process.stdout, stdout_chunks, stdout_truncated)
+                target=self._read_stream,
+                args=(process.stdout, stdout_chunks, stdout_truncated, policy.max_output_size),
             )
             err_thread = threading.Thread(
-                target=self._read_stream, args=(process.stderr, stderr_chunks, stderr_truncated)
+                target=self._read_stream,
+                args=(process.stderr, stderr_chunks, stderr_truncated, policy.max_output_size),
             )
             out_thread.daemon = True
             err_thread.daemon = True
             out_thread.start()
             err_thread.start()
 
+            def _terminate_process_tree(root_pid: int) -> None:
+                """Terminate root process and all discoverable descendants.
+
+                On macOS, Darwin lacks kernel-level PID namespaces or Job Objects.
+                A child that calls setsid() moves to a new process group and escapes
+                os.killpg(). To mitigate this, we recursively discover all descendant
+                PIDs via pgrep while the parent hierarchy is still intact, and send
+                SIGKILL to each discovered descendant individually, in addition to
+                signaling the root process group.
+                """
+                descendants: list[int] = []
+
+                def _collect_descendants(p: int) -> None:
+                    try:
+                        res = subprocess.run(
+                            ["pgrep", "-P", str(p)], capture_output=True, text=True, timeout=1.0
+                        )
+                        for pid_str in res.stdout.split():
+                            if pid_str.isdigit():
+                                child_pid = int(pid_str)
+                                descendants.append(child_pid)
+                                _collect_descendants(child_pid)
+                    except Exception:
+                        pass
+
+                _collect_descendants(root_pid)
+
+                for d in descendants:
+                    with contextlib.suppress(Exception):
+                        os.kill(d, signal.SIGKILL)  # type: ignore[attr-defined]
+
+                with contextlib.suppress(Exception):
+                    os.killpg(root_pid, signal.SIGKILL)  # type: ignore[attr-defined]
+
             timeout_expired = False
             try:
                 process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 timeout_expired = True
-                with contextlib.suppress(Exception):
-                    os.killpg(process.pid, signal.SIGKILL)  # type: ignore[attr-defined]
-                process.wait()
+                _terminate_process_tree(process.pid)
+                try:
+                    process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(Exception):
+                        process.kill()
+                    with contextlib.suppress(Exception):
+                        process.wait(timeout=1.0)
 
-            out_thread.join()
-            err_thread.join()
+            # Bound thread joins to avoid indefinite hangs if surviving or
+            # detached descendants retain inherited pipe write handles.
+            out_thread.join(timeout=1.0)
+            err_thread.join(timeout=1.0)
+
+            with contextlib.suppress(Exception):
+                if not out_thread.is_alive() and process.stdout:
+                    process.stdout.close()
+            with contextlib.suppress(Exception):
+                if not err_thread.is_alive() and process.stderr:
+                    process.stderr.close()
 
             stdout_bytes = b"".join(stdout_chunks)
             stderr_bytes = b"".join(stderr_chunks)

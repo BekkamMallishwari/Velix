@@ -125,7 +125,8 @@ class SandboxManager:
         secrets: dict[str, str] | None = None,
         memory_limit: int | None = None,
         process_limit: int | None = None,
-        cpu_limit: bool = True,
+        cpu_limit: bool = False,
+        max_output_size: int = 50_000,
     ) -> SandboxResult:
         """Execute a command in the sandbox.
 
@@ -139,7 +140,11 @@ class SandboxManager:
             memory_limit: Maximum memory in bytes.
             process_limit: Maximum number of processes.
             cpu_limit: Whether to enforce CPU time limits (requires SUPPORTED in STRICT mode).
+            max_output_size: Maximum output size in bytes for stdout and stderr.
         """
+        if max_output_size < 0:
+            raise SandboxError(f"max_output_size must be non-negative, got {max_output_size}")
+
         if self.backend is None:
             raise SandboxError(f"Sandbox backend unavailable for platform: {platform.system()}")
 
@@ -156,6 +161,7 @@ class SandboxManager:
             mode=policy_mode,
             allow_network=allow_network,
             max_execution_time=timeout,
+            max_output_size=max_output_size,
             secrets=list(secrets.keys()) if secrets else [],
             memory_limit=memory_limit,
             process_limit=process_limit,
