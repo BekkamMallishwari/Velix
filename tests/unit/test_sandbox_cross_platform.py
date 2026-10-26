@@ -220,31 +220,13 @@ def test_sandbox_negative_max_output_size_rejected(tmp_path: Path) -> None:
         manager.execute(["echo", "hi"], tmp_path, max_output_size=-5)
 
 
-@pytest.mark.parametrize(
-    "backend_cls_name",
-    [
-        "MacOSSandboxBackend",
-        "LinuxSandboxBackend",
-        "WindowsSandboxBackend",
-    ],
-)
-def test_backend_read_stream_output_limits(backend_cls_name: str) -> None:
+def test_backend_read_stream_output_limits() -> None:
+    """Verify _read_stream truncation and drainage on the native platform backend."""
     import io
-    import typing
 
-    reader_fn: typing.Callable[..., None]
-    if backend_cls_name == "MacOSSandboxBackend":
-        from velix_agent.sandbox.backends.macos import MacOSSandboxBackend
-
-        reader_fn = MacOSSandboxBackend._read_stream
-    elif backend_cls_name == "LinuxSandboxBackend":
-        from velix_agent.sandbox.backends.linux import LinuxSandboxBackend
-
-        reader_fn = LinuxSandboxBackend._read_stream
-    else:
-        from velix_agent.sandbox.backends.windows import WindowsSandboxBackend
-
-        reader_fn = WindowsSandboxBackend._read_stream
+    manager = SandboxManager()
+    assert manager.backend is not None, "Native backend must be available on supported OS"
+    reader_fn = manager.backend._read_stream
 
     # 1. Normal / small limit truncation
     stream = io.BytesIO(b"0123456789" * 10)  # 100 bytes
@@ -314,9 +296,13 @@ def test_sandbox_functional_small_output_limit(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert result.truncation_status["stdout"] is True
     assert result.truncation_status["stderr"] is False
-    assert "[TRUNCATED: Output exceeded maximum size limit]" in result.stdout
-    raw_part = result.stdout.split(r"\n...[TRUNCATED")[0]
-    assert len(raw_part.encode("utf-8")) <= 50
+    from velix_agent.sandbox.result import OUTPUT_TRUNCATION_MARKER
+
+    assert OUTPUT_TRUNCATION_MARKER in result.stdout
+    raw_part = result.stdout.split(OUTPUT_TRUNCATION_MARKER)[0]
+    assert len(raw_part.encode("utf-8")) == 50
+    assert raw_part == "A" * 50
+    assert result.stdout == "A" * 50 + OUTPUT_TRUNCATION_MARKER
 
 
 @pytest.mark.skipif(
@@ -438,6 +424,114 @@ def test_sandbox_functional_continuous_output_timeout_and_memory_bounded(tmp_pat
     assert result.truncation_status["stdout"] is True
 
 
+@pytest.mark.skipif(
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+)
+def test_sandbox_functional_output_exact_boundary(tmp_path: Path) -> None:
+    """Verify that output exactly equal to max_output_size is not marked truncated."""
+    from velix_agent.sandbox.result import OUTPUT_TRUNCATION_MARKER
+
+    manager = SandboxManager()
+    allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
+    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+
+    # Write exactly 50 bytes: 49 'B's plus newline
+    code = "import sys; sys.stdout.write('B' * 49 + '\\n'); sys.stdout.flush()"
+    result = manager.execute(
+        [_test_python, "-c", code],
+        tmp_path,
+        max_output_size=50,
+        allow_network=allow_net,
+        mode="BALANCED",
+    )
+
+    assert result.exit_code == 0
+    assert result.truncation_status["stdout"] is False
+    assert OUTPUT_TRUNCATION_MARKER not in result.stdout
+    assert len(result.stdout.encode("utf-8")) == 50
+
+
+@pytest.mark.skipif(
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+)
+def test_sandbox_functional_output_boundary_plus_one(tmp_path: Path) -> None:
+    """Verify that output of max_output_size + 1 is truncated to max_output_size."""
+    from velix_agent.sandbox.result import OUTPUT_TRUNCATION_MARKER
+
+    manager = SandboxManager()
+    allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
+    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+
+    # Write 51 bytes: 50 'B's plus newline
+    code = "import sys; sys.stdout.write('B' * 50 + '\\n'); sys.stdout.flush()"
+    result = manager.execute(
+        [_test_python, "-c", code],
+        tmp_path,
+        max_output_size=50,
+        allow_network=allow_net,
+        mode="BALANCED",
+    )
+
+    assert result.exit_code == 0
+    assert result.truncation_status["stdout"] is True
+    assert OUTPUT_TRUNCATION_MARKER in result.stdout
+    raw_part = result.stdout.split(OUTPUT_TRUNCATION_MARKER)[0]
+    assert len(raw_part.encode("utf-8")) == 50
+    assert raw_part == "B" * 50
+    assert result.stdout == "B" * 50 + OUTPUT_TRUNCATION_MARKER
+
+
+@pytest.mark.skipif(
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+)
+def test_sandbox_functional_output_utf8_multibyte_truncation(tmp_path: Path) -> None:
+    """Verify multi-byte UTF-8 output truncation handles byte boundaries and markers cleanly."""
+    from velix_agent.sandbox.result import OUTPUT_TRUNCATION_MARKER
+
+    manager = SandboxManager()
+    allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
+    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+
+    # '日' is 3 bytes in UTF-8 (b'\xe6\x97\xa5'). 10 '日's = 30 bytes.
+    # Set limit to exactly 7 bytes: 2 full characters (6 bytes) + 1 partial byte (b'\xe6').
+    expected_raw_bytes = ("日" * 10).encode("utf-8")[:7]
+    assert len(expected_raw_bytes) == 7
+    assert expected_raw_bytes == b"\xe6\x97\xa5\xe6\x97\xa5\xe6"
+    assert expected_raw_bytes.decode("utf-8", errors="replace") == "日日\ufffd"
+
+    # Verify direct backend stream reader captures exactly 7 bytes
+    if manager.backend is not None:
+        import io
+
+        stream = io.BytesIO(("日" * 10).encode("utf-8"))
+        chunks: list[bytes] = []
+        truncated = [False]
+        manager.backend._read_stream(stream, chunks, truncated, max_bytes=7)
+        captured_stream_bytes = b"".join(chunks)
+        assert len(captured_stream_bytes) == 7
+        assert captured_stream_bytes == b"\xe6\x97\xa5\xe6\x97\xa5\xe6"
+        assert truncated[0] is True
+        assert captured_stream_bytes.decode("utf-8", errors="replace") == "日日\ufffd"
+
+    code = "import sys; sys.stdout.write('日' * 10); sys.stdout.flush()"
+    result = manager.execute(
+        [_test_python, "-c", code],
+        tmp_path,
+        max_output_size=7,
+        allow_network=allow_net,
+        mode="BALANCED",
+    )
+
+    assert result.exit_code == 0
+    assert result.truncation_status["stdout"] is True
+    assert OUTPUT_TRUNCATION_MARKER in result.stdout
+    raw_part = result.stdout.split(OUTPUT_TRUNCATION_MARKER)[0]
+    # Exactly 7 raw bytes captured: 2 full 3-byte '日' chars (6 bytes) + 1 truncated byte (b'\xe6').
+    # Under utf-8 errors="replace", the 7th incomplete byte decodes to '\ufffd'.
+    assert raw_part == "日日\ufffd"
+    assert result.stdout == "日日\ufffd" + OUTPUT_TRUNCATION_MARKER
+
+
 def test_sandbox_cpu_limit_defaults_are_false(tmp_path: Path) -> None:
     """Verify that SandboxPolicy and SandboxManager.execute default cpu_limit to False."""
     # 1. SandboxPolicy default
@@ -459,10 +553,21 @@ def test_sandbox_cpu_limit_defaults_are_false(tmp_path: Path) -> None:
         )
         manager.backend = mock_backend
 
-        manager.execute(["echo", "hi"], tmp_path, mode="BALANCED")
+        # On platforms where network isolation is unsupported (e.g. Windows),
+        # allow_network must be explicitly True to satisfy policy capability validation.
+        # This allows testing the default forwarding of cpu_limit without triggering
+        # unrelated network isolation rejections on Windows.
+        allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
+        manager.execute(["echo", "hi"], tmp_path, mode="BALANCED", allow_network=allow_net)
         assert mock_backend.execute.called
         call_policy = mock_backend.execute.call_args[0][1]
         assert call_policy.cpu_limit is False
+
+        # Verify security validation still strictly fails-closed if allow_network=False
+        # on platforms where network isolation is unsupported.
+        if allow_net:
+            with pytest.raises(SandboxError, match="network_isolation"):
+                manager.execute(["echo", "hi"], tmp_path, mode="BALANCED", allow_network=False)
 
 
 def test_sandbox_explicit_cpu_limit_strict_mode_rejection(tmp_path: Path) -> None:

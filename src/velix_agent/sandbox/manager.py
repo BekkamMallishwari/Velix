@@ -140,7 +140,10 @@ class SandboxManager:
             memory_limit: Maximum memory in bytes.
             process_limit: Maximum number of processes.
             cpu_limit: Whether to enforce CPU time limits (requires SUPPORTED in STRICT mode).
-            max_output_size: Maximum output size in bytes for stdout and stderr.
+            max_output_size: Maximum raw bytes captured from each of stdout and stderr.
+                When a stream exceeds this limit, capture stops at this byte boundary,
+                the stream's truncation_status is flagged True, and OUTPUT_TRUNCATION_MARKER
+                is appended to the returned string.
         """
         if max_output_size < 0:
             raise SandboxError(f"max_output_size must be non-negative, got {max_output_size}")

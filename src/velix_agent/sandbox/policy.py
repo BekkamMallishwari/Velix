@@ -32,6 +32,14 @@ class SandboxPolicyMode(Enum):
 
 @dataclass
 class SandboxPolicy:
+    """Security and execution policy for sandboxed command execution.
+
+    Output Limit Contract:
+        `max_output_size` sets the maximum number of raw bytes captured from each of
+        stdout and stderr. If a stream emits more than `max_output_size` bytes, stream
+        capture stops at that byte limit, `truncation_status` is marked True for that stream,
+        and `OUTPUT_TRUNCATION_MARKER` is appended to the decoded output string.
+    """
     workspace_root: Path
     mode: SandboxPolicyMode = SandboxPolicyMode.STRICT
     allow_network: bool = False

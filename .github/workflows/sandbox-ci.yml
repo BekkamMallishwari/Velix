@@ -1,3 +1,5 @@
+---
+# yamllint disable rule:line-length
 name: Sandbox CI
 
 # Unified cross-platform sandbox CI workflow testing Linux, macOS, and Windows.
@@ -45,7 +47,7 @@ jobs:
       matrix:
         include:
           - name: Linux
-            os: ubuntu-latest
+            os: ubuntu-22.04
             backend_test: tests/unit/test_sandbox_linux.py
           - name: macOS
             os: macos-latest

@@ -26,10 +26,55 @@ def clean_systemd_cache() -> typing.Generator[None, None, None]:
 
 def test_linux_capabilities_no_bwrap(clean_systemd_cache: typing.Any) -> None:
     with patch("shutil.which", return_value=None):
+        assert LinuxSandboxBackend.is_bwrap_installed() is False
+        assert LinuxSandboxBackend.is_bwrap_execution_supported() is False
         caps = LinuxSandboxBackend.get_capabilities()
         assert caps.filesystem_isolation == "NOT_AVAILABLE"
         assert caps.network_isolation == "NOT_AVAILABLE"
         assert caps.memory_limit == "NOT_AVAILABLE"
+
+
+def test_linux_capabilities_bwrap_installed_but_execution_fails(
+    clean_systemd_cache: typing.Any,
+) -> None:
+    """Distinguish binary installed from sandbox execution supported."""
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("subprocess.run") as mock_run:
+        # Simulate bwrap: setting up uid map: Permission denied (exit code 1)
+        mock_run.return_value = MagicMock(returncode=1)
+        assert LinuxSandboxBackend.is_bwrap_installed() is True
+        assert LinuxSandboxBackend.is_bwrap_execution_supported() is False
+        caps = LinuxSandboxBackend.get_capabilities()
+        assert caps.filesystem_isolation == "NOT_AVAILABLE"
+        assert caps.network_isolation == "NOT_AVAILABLE"
+        assert caps.memory_limit == "NOT_AVAILABLE"
+
+
+def test_linux_capabilities_bwrap_installed_but_unshare_net_fails(
+    clean_systemd_cache: typing.Any,
+) -> None:
+    """Verify behavior when basic bwrap succeeds but network namespace unshare fails."""
+    def mock_run(cmd: list[str], **kwargs: typing.Any) -> MagicMock:
+        if "--unshare-net" in cmd:
+            return MagicMock(returncode=1)
+        return MagicMock(returncode=0)
+
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("subprocess.run", side_effect=mock_run):
+        assert LinuxSandboxBackend.is_bwrap_installed() is True
+        # Basic bwrap execution supported
+        assert (
+            LinuxSandboxBackend.is_bwrap_execution_supported(require_network_isolation=False)
+            is True
+        )
+        # Full sandbox requirements (including network isolation) fails
+        assert (
+            LinuxSandboxBackend.is_bwrap_execution_supported(require_network_isolation=True)
+            is False
+        )
+        caps = LinuxSandboxBackend.get_capabilities()
+        assert caps.filesystem_isolation == "SUPPORTED"
+        assert caps.network_isolation == "UNSUPPORTED"
 
 
 def test_linux_capabilities_no_systemd(clean_systemd_cache: typing.Any) -> None:

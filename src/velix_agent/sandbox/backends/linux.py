@@ -16,7 +16,11 @@ from pathlib import Path
 from velix_agent.core.logging import get_logger
 from velix_agent.sandbox.backends.base import SandboxBackend
 from velix_agent.sandbox.policy import SandboxCapabilities, SandboxPolicy
-from velix_agent.sandbox.result import SandboxError, SandboxResult
+from velix_agent.sandbox.result import (
+    OUTPUT_TRUNCATION_MARKER,
+    SandboxError,
+    SandboxResult,
+)
 
 logger = get_logger("sandbox.linux")
 
@@ -98,8 +102,27 @@ class LinuxSandboxBackend(SandboxBackend):
         return bool(cls._bwrap_execution_supported_cache)
 
     @classmethod
+    def is_bwrap_installed(cls) -> bool:
+        """Check if the bubblewrap (bwrap) binary is present in PATH."""
+        return shutil.which("bwrap") is not None
+
+    @classmethod
+    def is_bwrap_execution_supported(cls, require_network_isolation: bool = True) -> bool:
+        """Check if bubblewrap can genuinely execute an unprivileged sandbox container.
+
+        Checks unprivileged user namespace execution, and optionally requires network
+        namespace isolation (--unshare-net), matching the CI workflow and sandbox execution
+        requirements.
+        """
+        if not cls._detect_bwrap_execution():
+            return False
+        if require_network_isolation:
+            return cls._detect_unshare_net()
+        return True
+
+    @classmethod
     def get_capabilities(cls) -> SandboxCapabilities:
-        has_bwrap = cls._detect_bwrap_execution()
+        has_bwrap = cls.is_bwrap_execution_supported(require_network_isolation=False)
         if not has_bwrap:
             return SandboxCapabilities(
                 filesystem_isolation="NOT_AVAILABLE",
@@ -527,9 +550,9 @@ class LinuxSandboxBackend(SandboxBackend):
             stderr_str = stderr_bytes.decode("utf-8", errors="replace")
 
             if stdout_truncated[0]:
-                stdout_str += "\\n...[TRUNCATED: Output exceeded maximum size limit]..."
+                stdout_str += OUTPUT_TRUNCATION_MARKER
             if stderr_truncated[0]:
-                stderr_str += "\\n...[TRUNCATED: Output exceeded maximum size limit]..."
+                stderr_str += OUTPUT_TRUNCATION_MARKER
 
             if timeout_expired:
                 return SandboxResult(

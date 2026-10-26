@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+OUTPUT_TRUNCATION_MARKER = "\n...[TRUNCATED: Output exceeded maximum size limit]..."
+
 
 @dataclass
 class SandboxResult:
