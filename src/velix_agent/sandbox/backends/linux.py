@@ -381,6 +381,7 @@ class LinuxSandboxBackend(SandboxBackend):
                         json.dumps({
                             "dev": sentinel_identity[0],
                             "ino": sentinel_identity[1],
+                            "mode": 0,  # always 0o000
                             "pid": os.getpid(),
                         })
                     )
@@ -609,6 +610,11 @@ class LinuxSandboxBackend(SandboxBackend):
                                 not pystat.S_ISLNK(st.st_mode)
                                 and pystat.S_ISDIR(st.st_mode)
                                 and (st.st_dev, st.st_ino) == sentinel_identity
+                                # Mode must still be 0o000: our sentinel is always created with
+                                # chmod(0o000). On Linux, rmdir+mkdir can reuse the same inode
+                                # immediately, causing a false-positive identity match. A genuine
+                                # replacement directory will have a non-zero mode (e.g. 0o755).
+                                and pystat.S_IMODE(st.st_mode) == 0o000
                             ):
                                 # Atomic removal: POSIX rmdir operates on parent and does NOT
                                 # require write permission on the target directory itself.
@@ -618,10 +624,12 @@ class LinuxSandboxBackend(SandboxBackend):
                                 with contextlib.suppress(OSError):
                                     sentinel_info_path.unlink()
                             else:
+                                found_mode = oct(pystat.S_IMODE(st.st_mode))
                                 recovery_msg = (
                                     f"Sentinel at {git_path} was replaced or has mismatched "
-                                    f"identity (expected {sentinel_identity}, "
-                                    f"found {(st.st_dev, st.st_ino)}). Leaving path untouched. "
+                                    f"identity or mode (expected id={sentinel_identity}, "
+                                    f"mode=0o000; found id={(st.st_dev, st.st_ino)}, "
+                                    f"mode={found_mode}). Leaving path untouched. "
                                     f"Manual recovery: verify contents and remove with "
                                     f"'chmod 700 {git_path} && rmdir {git_path}'."
                                 )
