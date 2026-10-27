@@ -226,7 +226,7 @@ def test_backend_read_stream_output_limits() -> None:
 
     manager = SandboxManager()
     assert manager.backend is not None, "Native backend must be available on supported OS"
-    reader_fn = manager.backend._read_stream
+    reader_fn = manager.backend._read_stream  # type: ignore[attr-defined]  # private concrete method, not on ABC
 
     # 1. Normal / small limit truncation
     stream = io.BytesIO(b"0123456789" * 10)  # 100 bytes
@@ -435,8 +435,8 @@ def test_sandbox_functional_output_exact_boundary(tmp_path: Path) -> None:
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
     _test_python = "python3" if platform.system() == "Linux" else sys.executable
 
-    # Write exactly 50 bytes: 49 'B's plus newline
-    code = "import sys; sys.stdout.write('B' * 49 + '\\n'); sys.stdout.flush()"
+    # Write exactly 50 bytes in binary to avoid OS-dependent newline (CRLF) translation
+    code = "import sys; sys.stdout.buffer.write(b'B' * 50); sys.stdout.buffer.flush()"
     result = manager.execute(
         [_test_python, "-c", code],
         tmp_path,
@@ -446,9 +446,10 @@ def test_sandbox_functional_output_exact_boundary(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert result.truncation_status["stdout"] is False
+    assert result.truncation_status == {"stdout": False, "stderr": False}
     assert OUTPUT_TRUNCATION_MARKER not in result.stdout
     assert len(result.stdout.encode("utf-8")) == 50
+    assert result.stdout == "B" * 50
 
 
 @pytest.mark.skipif(
@@ -462,8 +463,8 @@ def test_sandbox_functional_output_boundary_plus_one(tmp_path: Path) -> None:
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
     _test_python = "python3" if platform.system() == "Linux" else sys.executable
 
-    # Write 51 bytes: 50 'B's plus newline
-    code = "import sys; sys.stdout.write('B' * 50 + '\\n'); sys.stdout.flush()"
+    # Write exactly 51 bytes in binary to avoid OS-dependent newline (CRLF) translation
+    code = "import sys; sys.stdout.buffer.write(b'B' * 51); sys.stdout.buffer.flush()"
     result = manager.execute(
         [_test_python, "-c", code],
         tmp_path,
@@ -474,6 +475,7 @@ def test_sandbox_functional_output_boundary_plus_one(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert result.truncation_status["stdout"] is True
+    assert result.truncation_status["stderr"] is False
     assert OUTPUT_TRUNCATION_MARKER in result.stdout
     raw_part = result.stdout.split(OUTPUT_TRUNCATION_MARKER)[0]
     assert len(raw_part.encode("utf-8")) == 50
@@ -506,14 +508,20 @@ def test_sandbox_functional_output_utf8_multibyte_truncation(tmp_path: Path) -> 
         stream = io.BytesIO(("日" * 10).encode("utf-8"))
         chunks: list[bytes] = []
         truncated = [False]
-        manager.backend._read_stream(stream, chunks, truncated, max_bytes=7)
+        manager.backend._read_stream(stream, chunks, truncated, max_bytes=7)  # type: ignore[attr-defined]
         captured_stream_bytes = b"".join(chunks)
         assert len(captured_stream_bytes) == 7
         assert captured_stream_bytes == b"\xe6\x97\xa5\xe6\x97\xa5\xe6"
         assert truncated[0] is True
         assert captured_stream_bytes.decode("utf-8", errors="replace") == "日日\ufffd"
 
-    code = "import sys; sys.stdout.write('日' * 10); sys.stdout.flush()"
+    # Write encoded bytes directly to sys.stdout.buffer to ensure portability across
+    # platforms without depending on the host's default text/console codepage (e.g. Windows cp1252).
+    code = (
+        "import sys\n"
+        "sys.stdout.buffer.write(('日' * 10).encode('utf-8'))\n"
+        "sys.stdout.buffer.flush()\n"
+    )
     result = manager.execute(
         [_test_python, "-c", code],
         tmp_path,
@@ -524,12 +532,56 @@ def test_sandbox_functional_output_utf8_multibyte_truncation(tmp_path: Path) -> 
 
     assert result.exit_code == 0
     assert result.truncation_status["stdout"] is True
+    assert result.truncation_status["stderr"] is False
     assert OUTPUT_TRUNCATION_MARKER in result.stdout
     raw_part = result.stdout.split(OUTPUT_TRUNCATION_MARKER)[0]
     # Exactly 7 raw bytes captured: 2 full 3-byte '日' chars (6 bytes) + 1 truncated byte (b'\xe6').
     # Under utf-8 errors="replace", the 7th incomplete byte decodes to '\ufffd'.
     assert raw_part == "日日\ufffd"
     assert result.stdout == "日日\ufffd" + OUTPUT_TRUNCATION_MARKER
+
+
+@pytest.mark.skipif(
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+)
+def test_sandbox_functional_stderr_exact_boundary_and_truncation(tmp_path: Path) -> None:
+    """Verify stderr stream truncation behavior independently at exact and overflow boundaries."""
+    from velix_agent.sandbox.result import OUTPUT_TRUNCATION_MARKER
+
+    manager = SandboxManager()
+    allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
+    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+
+    # 1. Stderr exact boundary: 50 bytes with limit 50 -> not truncated
+    code_exact = "import sys; sys.stderr.buffer.write(b'E' * 50); sys.stderr.buffer.flush()"
+    result_exact = manager.execute(
+        [_test_python, "-c", code_exact],
+        tmp_path,
+        max_output_size=50,
+        allow_network=allow_net,
+        mode="BALANCED",
+    )
+    assert result_exact.exit_code == 0
+    assert result_exact.truncation_status == {"stdout": False, "stderr": False}
+    assert result_exact.stderr == "E" * 50
+    assert OUTPUT_TRUNCATION_MARKER not in result_exact.stderr
+
+    # 2. Stderr boundary plus one: 51 bytes with limit 50 -> stderr truncated, stdout not truncated
+    code_overflow = "import sys; sys.stderr.buffer.write(b'E' * 51); sys.stderr.buffer.flush()"
+    result_overflow = manager.execute(
+        [_test_python, "-c", code_overflow],
+        tmp_path,
+        max_output_size=50,
+        allow_network=allow_net,
+        mode="BALANCED",
+    )
+    assert result_overflow.exit_code == 0
+    assert result_overflow.truncation_status == {"stdout": False, "stderr": True}
+    assert OUTPUT_TRUNCATION_MARKER in result_overflow.stderr
+    raw_stderr = result_overflow.stderr.split(OUTPUT_TRUNCATION_MARKER)[0]
+    assert len(raw_stderr.encode("utf-8")) == 50
+    assert raw_stderr == "E" * 50
+    assert result_overflow.stderr == "E" * 50 + OUTPUT_TRUNCATION_MARKER
 
 
 def test_sandbox_cpu_limit_defaults_are_false(tmp_path: Path) -> None:

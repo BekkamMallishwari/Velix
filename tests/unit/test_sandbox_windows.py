@@ -474,3 +474,83 @@ def test_windows_non_zero_exit_code_preserved(tmp_path: Path) -> None:
     assert result.exit_code == 42
     assert "failed" in result.stdout
     mock_term.assert_any_call(1000, 0)
+
+
+def test_windows_read_stream_exact_boundary() -> None:
+    """Verify _read_stream does not mark truncation when output equals limit exactly."""
+    stream = io.BytesIO(b"W" * 50)
+    chunks: list[bytes] = []
+    truncated = [False]
+    WindowsSandboxBackend._read_stream(stream, chunks, truncated, max_bytes=50)
+    assert b"".join(chunks) == b"W" * 50
+    assert truncated[0] is False
+
+
+def test_windows_read_stream_boundary_plus_one() -> None:
+    """Verify _read_stream marks truncation when output exceeds limit by one byte."""
+    stream = io.BytesIO(b"W" * 51)
+    chunks: list[bytes] = []
+    truncated = [False]
+    WindowsSandboxBackend._read_stream(stream, chunks, truncated, max_bytes=50)
+    assert b"".join(chunks) == b"W" * 50
+    assert truncated[0] is True
+
+
+def test_windows_read_stream_zero_limit_empty() -> None:
+    """Verify _read_stream with 0 limit on empty stream is not marked truncated."""
+    stream = io.BytesIO(b"")
+    chunks: list[bytes] = []
+    truncated = [False]
+    WindowsSandboxBackend._read_stream(stream, chunks, truncated, max_bytes=0)
+    assert b"".join(chunks) == b""
+    assert truncated[0] is False
+
+
+def test_windows_read_stream_zero_limit_with_data() -> None:
+    """Verify _read_stream with 0 limit when data is emitted marks truncated."""
+    stream = io.BytesIO(b"data")
+    chunks: list[bytes] = []
+    truncated = [False]
+    WindowsSandboxBackend._read_stream(stream, chunks, truncated, max_bytes=0)
+    assert b"".join(chunks) == b""
+    assert truncated[0] is True
+
+
+def test_windows_read_stream_utf8_multibyte_truncation() -> None:
+    """Verify _read_stream isolates exact bytes and replacement decoding cleanly."""
+    raw_utf8 = ("日" * 10).encode("utf-8")  # 30 bytes
+    stream = io.BytesIO(raw_utf8)
+    chunks: list[bytes] = []
+    truncated = [False]
+    WindowsSandboxBackend._read_stream(stream, chunks, truncated, max_bytes=7)
+    captured = b"".join(chunks)
+    assert len(captured) == 7
+    assert captured == b"\xe6\x97\xa5\xe6\x97\xa5\xe6"
+    assert truncated[0] is True
+    assert captured.decode("utf-8", errors="replace") == "日日\ufffd"
+
+
+def test_windows_execute_truncation_markers_applied(tmp_path: Path) -> None:
+    """Verify WindowsSandboxBackend.execute appends OUTPUT_TRUNCATION_MARKER on truncation."""
+    from velix_agent.sandbox.result import OUTPUT_TRUNCATION_MARKER
+
+    backend = WindowsSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True, max_output_size=5)
+    mock_proc = _mock_win_process(stdout_data=b"1234567890", stderr_data=b"abcdefghij")
+
+    with (
+        patch("platform.system", return_value="Windows"),
+        patch("velix_agent.sandbox.backends.windows.CreateJobObjectW", return_value=1000),
+        patch("velix_agent.sandbox.backends.windows.SetInformationJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.AssignProcessToJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.NtResumeProcess", return_value=0),
+        patch("velix_agent.sandbox.backends.windows.TerminateJobObject", return_value=True),
+        patch("velix_agent.sandbox.backends.windows.CloseHandle", return_value=True),
+        patch("subprocess.Popen", return_value=mock_proc),
+    ):
+        result = backend.execute(["test.exe"], policy)
+
+    assert result.exit_code == 0
+    assert result.truncation_status == {"stdout": True, "stderr": True}
+    assert result.stdout == "12345" + OUTPUT_TRUNCATION_MARKER
+    assert result.stderr == "abcde" + OUTPUT_TRUNCATION_MARKER
