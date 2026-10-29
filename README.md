@@ -147,13 +147,15 @@ VELIX_USE_SHADOW_WORKSPACE=true
 
 ## Sandbox Architecture
 
-VelixAgent uses a platform-specific sandbox architecture to isolate tool execution:
+VelixAgent uses a platform-specific sandbox architecture to isolate tool execution, with **macOS and Windows as the only supported platforms**:
 
-*   **macOS:** Uses Apple's Seatbelt (`sandbox-exec`) for filesystem, network, and process isolation.
-*   **Linux:** Uses Bubblewrap (`bwrap`) for containerized namespace isolation.
-*   **Windows:** Implements a Two-Tier sandbox approach:
-    *   **Tier 1 (Native Job Object):** The default backend. Uses native Win32 Job Objects. Enforces resource constraints (Memory/Process/Timeout) and strict process-tree cleanup. **Does not require Administrator privileges.** Note: Tier 1 does NOT provide strict filesystem or network isolation.
-    *   **Tier 2 (Windows Container):** (Optional/Future) A stronger isolation backend requiring Docker/Windows Containers for complete filesystem and network sandboxing.
+*   **macOS (Supported):** Uses Apple Seatbelt (`sandbox-exec`) profile generation.
+    *   *Enforced:* Workspace filesystem isolation, network denial (outbound & localhost), `RLIMIT_CPU` limits, execution timeouts, output truncation, and secret redaction.
+    *   *Security Limitation:* Double-forked processes that reparent to PID 1 (`launchd`) escape user-space process-tree walks because Darwin lacks kernel PID namespaces. Session-leader termination and workspace confinement remain strictly enforced.
+*   **Windows (Supported):** Uses native Win32 Job Objects via ctypes (`SetInformationJobObject`).
+    *   *Enforced:* Process tree containment, execution timeouts, active process limits, memory limits, output truncation, and secret redaction. **Does not require Administrator privileges.**
+    *   *Security Limitation:* Native filesystem and network isolation are currently **unsupported** (no AppContainer or Windows Filtering Platform rules). Tests requiring filesystem/network isolation skip on Windows; skips are never treated as proof of isolation.
+*   **Linux (Unsupported):** Linux is explicitly unsupported for sandbox execution. The sandbox fails closed immediately with a `SandboxError` (`"Sandbox backend unavailable for platform: Linux"`). It **never** silently falls back to unrestricted subprocess execution.
 
 ---
 

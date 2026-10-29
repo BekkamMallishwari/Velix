@@ -11,6 +11,15 @@ from velix_agent.sandbox.result import SandboxError, SandboxResult
 
 
 class SandboxManager:
+    """Manages platform-specific sandbox execution.
+
+    Supported platforms:
+      - macOS (Darwin): Apple Seatbelt (sandbox-exec) backend
+      - Windows: Win32 Job Object backend
+
+    Linux and other platforms are unsupported and fail closed with SandboxError.
+    """
+
     backend: SandboxBackend | None
 
     def __init__(self, backend: SandboxBackend | None = None, _force_none: bool = False):
@@ -22,10 +31,6 @@ class SandboxManager:
                 from velix_agent.sandbox.backends.macos import MacOSSandboxBackend
 
                 self.backend = MacOSSandboxBackend()
-            elif sys_name == "Linux":
-                from velix_agent.sandbox.backends.linux import LinuxSandboxBackend
-
-                self.backend = LinuxSandboxBackend()
             elif sys_name == "Windows":
                 from velix_agent.sandbox.backends.windows import WindowsSandboxBackend
 
@@ -149,7 +154,13 @@ class SandboxManager:
             raise SandboxError(f"max_output_size must be non-negative, got {max_output_size}")
 
         if self.backend is None:
-            raise SandboxError(f"Sandbox backend unavailable for platform: {platform.system()}")
+            sys_name = platform.system()
+            if sys_name == "Linux":
+                raise SandboxError(
+                    "Sandbox backend unavailable for platform: Linux. "
+                    "Linux is not a supported sandbox platform (supported: macOS, Windows)."
+                )
+            raise SandboxError(f"Sandbox backend unavailable for platform: {sys_name}")
 
         root = Path(workspace_root).resolve()
         if not root.is_dir():

@@ -25,6 +25,47 @@ def test_sandbox_unsupported_platform(monkeypatch: pytest.MonkeyPatch) -> None:
         manager.execute(["echo", "hello"], "/tmp")
 
 
+def test_sandbox_linux_unsupported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Linux must return unavailable capabilities and fail closed with SandboxError.
+
+    Proves that a requested command is never executed on Linux and no unrestricted
+    subprocess fallback occurs.
+    """
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+
+    manager = SandboxManager()
+    assert manager.backend is None
+
+    caps = manager.get_capabilities()
+    for field_name in (
+        "filesystem_isolation",
+        "network_isolation",
+        "cpu_limit",
+        "memory_limit",
+        "process_limit",
+        "timeout",
+        "output_limit",
+        "secret_filtering",
+        "disk_limit",
+        "runtime_isolation",
+        "observability",
+        "security_hardening",
+    ):
+        assert getattr(caps, field_name) == "NOT_AVAILABLE"
+
+    # Command that would create a marker file if executed
+    canary_file = tmp_path / "canary_linux_executed.txt"
+    command = [sys.executable, "-c", f"open({str(canary_file)!r}, 'w').write('executed')"]
+
+    with pytest.raises(
+        SandboxError, match=r"Sandbox backend unavailable for platform: Linux"
+    ):
+        manager.execute(command, tmp_path)
+
+    # Prove command was NEVER executed (fail-closed, no unrestricted fallback)
+    assert not canary_file.exists(), "Command was executed despite Linux being unsupported!"
+
+
 def test_sandbox_capabilities() -> None:
     manager = SandboxManager()
     caps = manager.get_capabilities()
@@ -34,7 +75,7 @@ def test_sandbox_capabilities() -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_cross_platform_basic_execution(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -48,13 +89,13 @@ def test_sandbox_cross_platform_basic_execution(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_cross_platform_timeout(tmp_path: Path) -> None:
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
 
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     # Use _test_python to sleep
     result = manager.execute(
@@ -70,14 +111,14 @@ def test_sandbox_cross_platform_timeout(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_cross_platform_workspace_restriction(tmp_path: Path) -> None:
     # Basic check that the process starts in the workspace
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
 
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     code = "import os\nprint(os.getcwd())\n"
     result = manager.execute(
@@ -91,7 +132,7 @@ def test_sandbox_cross_platform_workspace_restriction(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_network_isolation_enforcement(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -118,7 +159,7 @@ def test_sandbox_network_isolation_enforcement(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_disk_limit_unsupported() -> None:
     manager = SandboxManager()
@@ -278,12 +319,12 @@ def test_backend_read_stream_output_limits() -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_small_output_limit(tmp_path: Path) -> None:
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     result = manager.execute(
         [_test_python, "-c", "print('A' * 500)"],
@@ -306,12 +347,12 @@ def test_sandbox_functional_small_output_limit(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_large_output_limit_no_truncation(tmp_path: Path) -> None:
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     result = manager.execute(
         [_test_python, "-c", "print('hello' * 10)"],
@@ -328,12 +369,12 @@ def test_sandbox_functional_large_output_limit_no_truncation(tmp_path: Path) -> 
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_zero_output_limit(tmp_path: Path) -> None:
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     # Case A: command emits data with limit=0 -> truncated, no original data
     result = manager.execute(
@@ -365,12 +406,12 @@ def test_sandbox_functional_zero_output_limit(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_independent_stream_limits(tmp_path: Path) -> None:
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     code = (
         "import sys\n"
@@ -396,12 +437,12 @@ def test_sandbox_functional_independent_stream_limits(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_continuous_output_timeout_and_memory_bounded(tmp_path: Path) -> None:
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     code = (
         "import sys, time\n"
@@ -425,7 +466,7 @@ def test_sandbox_functional_continuous_output_timeout_and_memory_bounded(tmp_pat
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_output_exact_boundary(tmp_path: Path) -> None:
     """Verify that output exactly equal to max_output_size is not marked truncated."""
@@ -433,7 +474,7 @@ def test_sandbox_functional_output_exact_boundary(tmp_path: Path) -> None:
 
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     # Write exactly 50 bytes in binary to avoid OS-dependent newline (CRLF) translation
     code = "import sys; sys.stdout.buffer.write(b'B' * 50); sys.stdout.buffer.flush()"
@@ -453,7 +494,7 @@ def test_sandbox_functional_output_exact_boundary(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_output_boundary_plus_one(tmp_path: Path) -> None:
     """Verify that output of max_output_size + 1 is truncated to max_output_size."""
@@ -461,7 +502,7 @@ def test_sandbox_functional_output_boundary_plus_one(tmp_path: Path) -> None:
 
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     # Write exactly 51 bytes in binary to avoid OS-dependent newline (CRLF) translation
     code = "import sys; sys.stdout.buffer.write(b'B' * 51); sys.stdout.buffer.flush()"
@@ -484,7 +525,7 @@ def test_sandbox_functional_output_boundary_plus_one(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_output_utf8_multibyte_truncation(tmp_path: Path) -> None:
     """Verify multi-byte UTF-8 output truncation handles byte boundaries and markers cleanly."""
@@ -492,7 +533,7 @@ def test_sandbox_functional_output_utf8_multibyte_truncation(tmp_path: Path) -> 
 
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     # '日' is 3 bytes in UTF-8 (b'\xe6\x97\xa5'). 10 '日's = 30 bytes.
     # Set limit to exactly 7 bytes: 2 full characters (6 bytes) + 1 partial byte (b'\xe6').
@@ -542,7 +583,7 @@ def test_sandbox_functional_output_utf8_multibyte_truncation(tmp_path: Path) -> 
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_stderr_exact_boundary_and_truncation(tmp_path: Path) -> None:
     """Verify stderr stream truncation behavior independently at exact and overflow boundaries."""
@@ -550,7 +591,7 @@ def test_sandbox_functional_stderr_exact_boundary_and_truncation(tmp_path: Path)
 
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     # 1. Stderr exact boundary: 50 bytes with limit 50 -> not truncated
     code_exact = "import sys; sys.stderr.buffer.write(b'E' * 50); sys.stderr.buffer.flush()"
@@ -703,13 +744,13 @@ def test_sandbox_explicit_cpu_limit_balanced_mode_tolerates_partial(tmp_path: Pa
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_timeout_with_detached_descendant(tmp_path: Path) -> None:
     """Verify timeout handling returns boundedly even if a descendant detaches and survives."""
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     pid_file = tmp_path / "descendant.pid"
     code = (
@@ -768,13 +809,13 @@ def test_sandbox_timeout_with_detached_descendant(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_normal_root_exit_with_background_descendant(tmp_path: Path) -> None:
     """Verify normal root exit returns boundedly and captures output when descendant survives."""
     manager = SandboxManager()
     allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
-    _test_python = "python3" if platform.system() == "Linux" else sys.executable
+    _test_python = sys.executable
 
     pid_file = tmp_path / "descendant_normal.pid"
     code = (
