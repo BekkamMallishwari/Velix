@@ -14,6 +14,41 @@ from velix_agent.sandbox.result import SandboxError, SandboxResult
 
 
 @pytest.fixture
+def _cleanup_zero_mode_dirs(tmp_path: Path) -> typing.Generator[None, None, None]:
+    """Restore permissions on 0o000-mode directories inside test-owned tmp_path after test.
+
+    Used by tests that deliberately simulate sentinel cleanup failure (which leaves
+    a mode-0000 directory inside the test's tmp_path). Scans only within the test's
+    own tmp_path, verifies ownership, does not follow symlinks, and restores mode 0o700
+    so pytest can remove its temporary directory without warnings.
+    """
+    import stat as _stat
+
+    yield
+    if not tmp_path.is_dir():
+        return
+
+    tmp_path_resolved = tmp_path.resolve()
+    for dirpath, dirnames, _ in os.walk(tmp_path, topdown=False, followlinks=False):
+        for d in dirnames:
+            p = os.path.join(dirpath, d)
+            try:
+                st = os.stat(p, follow_symlinks=False)
+                if (
+                    not _stat.S_ISLNK(st.st_mode)
+                    and _stat.S_ISDIR(st.st_mode)
+                    and _stat.S_IMODE(st.st_mode) == 0o000
+                    and st.st_uid == os.getuid()
+                ):
+                    resolved_p = Path(p).resolve()
+                    if resolved_p.is_relative_to(tmp_path_resolved):
+                        os.chmod(p, 0o700)
+            except OSError:
+                pass
+
+
+
+@pytest.fixture
 def clean_systemd_cache() -> typing.Generator[None, None, None]:
     LinuxSandboxBackend._systemd_supported_cache = None
     LinuxSandboxBackend._unshare_net_supported_cache = None
@@ -667,8 +702,13 @@ def _mp_worker(ws_str: str, out_queue: typing.Any) -> None:
         out_queue.put(res.exit_code)
 
 
+@pytest.mark.timeout(30)
 def test_bwrap_sentinel_multiprocess_concurrency(tmp_path: Path) -> None:
-    """Verify genuinely independent processes coordinate sentinel via client token IPC locking."""
+    """Verify genuinely independent processes coordinate sentinel via client token IPC locking.
+
+    A 30-second hard timeout is applied via pytest-timeout to guarantee that a stuck
+    spawned worker process cannot block the CI runner indefinitely.
+    """
     import multiprocessing
 
     git_dir = tmp_path / ".git"
@@ -717,8 +757,14 @@ def test_bwrap_sentinel_multiprocess_concurrency(tmp_path: Path) -> None:
             with contextlib.suppress(Exception):
                 p.close()
         with contextlib.suppress(Exception):
-            q.close()
+            # cancel_join_thread MUST be called before close() on Linux.
+            # q.close() blocks until the Queue's background feeder thread finishes
+            # flushing its write buffer; cancel_join_thread() skips that wait.
+            # Calling cancel_join_thread() first prevents a deadlock when the
+            # spawned worker process exited without draining the queue.
             q.cancel_join_thread()
+        with contextlib.suppress(Exception):
+            q.close()
 
 
 def test_bwrap_lock_acquisition_failure_fails_closed(tmp_path: Path) -> None:
@@ -735,6 +781,32 @@ def test_bwrap_lock_acquisition_failure_fails_closed(tmp_path: Path) -> None:
             backend.execute(["echo", "test"], policy)
 
         # Precondition verified: no .git or sentinel directory was created
+        assert not (tmp_path / ".git").exists()
+
+
+def test_bwrap_lock_acquisition_contention_timeout_fails_closed(tmp_path: Path) -> None:
+    """Verify that lock contention retries until timeout, closes fd, and fails closed."""
+    backend = LinuxSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+
+    current_time = 0.0
+
+    def advancing_monotonic() -> float:
+        nonlocal current_time
+        val = current_time
+        current_time += 6.0
+        return val
+
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("platform.system", return_value="Linux"), \
+         patch("fcntl.flock", side_effect=BlockingIOError("Resource temporarily unavailable")), \
+         patch("time.sleep"), \
+         patch("time.monotonic", side_effect=advancing_monotonic):
+
+        err_pattern = r"Failed to acquire workspace master lock.*timed out after 10s"
+        with pytest.raises(SandboxError, match=err_pattern):
+            backend.execute(["echo", "test"], policy)
+
         assert not (tmp_path / ".git").exists()
 
 
@@ -769,7 +841,9 @@ def test_bwrap_timeout_preserves_sentinel_cleanup(tmp_path: Path) -> None:
         assert not git_dir.exists(), "Sentinel must be removed even if command timed out"
 
 
-def test_bwrap_execution_and_cleanup_failure_chains_exception(tmp_path: Path) -> None:
+def test_bwrap_execution_and_cleanup_failure_chains_exception(
+    tmp_path: Path, _cleanup_zero_mode_dirs: typing.Any
+) -> None:
     """Verify that if execution fails and cleanup also fails, original exception is chained."""
     git_dir = tmp_path / ".git"
     assert not git_dir.exists()

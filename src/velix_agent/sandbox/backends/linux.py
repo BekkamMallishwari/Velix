@@ -1,4 +1,5 @@
 import contextlib
+import errno
 import fcntl
 import hashlib
 import os
@@ -277,18 +278,51 @@ class LinuxSandboxBackend(SandboxBackend):
         client_token_path = clients_dir / client_token_name
         client_token_fd: int | None = None
 
-        # Fail-closed helper for acquiring master lock
+        # Fail-closed helper for acquiring master lock.
+        # Uses a non-blocking flock with a bounded retry loop to avoid indefinite hangs
+        # if a previously killed process left an inherited file descriptor open briefly.
+        _LOCK_ACQUIRE_TIMEOUT_S = 10.0
+        _LOCK_RETRY_INTERVAL_S = 0.05
+
         def _acquire_master_lock() -> int:
+            import time as _time
+
             try:
                 ipc_dir.mkdir(parents=True, exist_ok=True)
                 clients_dir.mkdir(parents=True, exist_ok=True)
                 fd = os.open(master_lock_path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
-                fcntl.flock(fd, fcntl.LOCK_EX)
-                return fd
-            except Exception as lock_exc:
+            except Exception as open_exc:
                 raise SandboxError(
-                    f"Failed to acquire workspace master lock for {workspace_path}: {lock_exc}"
-                ) from lock_exc
+                    f"Failed to acquire workspace master lock for {workspace_path}: {open_exc}"
+                ) from open_exc
+
+            try:
+                deadline = _time.monotonic() + _LOCK_ACQUIRE_TIMEOUT_S
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        return fd
+                    except (BlockingIOError, OSError) as flock_exc:
+                        is_contention = isinstance(flock_exc, BlockingIOError) or getattr(
+                            flock_exc, "errno", None
+                        ) in (errno.EAGAIN, errno.EWOULDBLOCK)
+                        if not is_contention:
+                            raise SandboxError(
+                                f"Failed to acquire workspace master lock for {workspace_path}: "
+                                f"{flock_exc}"
+                            ) from flock_exc
+
+                        remaining = deadline - _time.monotonic()
+                        if remaining <= 0:
+                            raise SandboxError(
+                                f"Failed to acquire workspace master lock for {workspace_path}: "
+                                f"timed out after {_LOCK_ACQUIRE_TIMEOUT_S:.0f}s: {flock_exc}"
+                            ) from flock_exc
+                        _time.sleep(min(_LOCK_RETRY_INTERVAL_S, remaining))
+            except Exception:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+                raise
 
         def _release_master_lock(fd: int) -> None:
             with contextlib.suppress(OSError):
@@ -326,7 +360,7 @@ class LinuxSandboxBackend(SandboxBackend):
                 client_token_fd = os.open(
                     client_token_path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600
                 )
-                fcntl.flock(client_token_fd, fcntl.LOCK_EX)
+                fcntl.flock(client_token_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except Exception as client_exc:
                 if client_token_fd is not None:
                     with contextlib.suppress(OSError):
@@ -387,6 +421,20 @@ class LinuxSandboxBackend(SandboxBackend):
                     )
                     bwrap_cmd.extend(["--perms", "0000", "--tmpfs", git_path.as_posix()])
                 except Exception as sentinel_exc:
+                    if client_token_fd is not None:
+                        with contextlib.suppress(OSError):
+                            fcntl.flock(client_token_fd, fcntl.LOCK_UN)
+                            os.close(client_token_fd)
+                            client_token_fd = None
+                        with contextlib.suppress(OSError):
+                            client_token_path.unlink()
+                    if created_git_sentinel and sentinel_identity is not None:
+                        with contextlib.suppress(OSError):
+                            git_path.chmod(0o700)
+                            git_path.rmdir()
+                        with contextlib.suppress(OSError):
+                            sentinel_info_path.unlink()
+                        created_git_sentinel = False
                     logger.warning(
                         "Could not establish transient .git sentinel directory: %s", sentinel_exc
                     )
