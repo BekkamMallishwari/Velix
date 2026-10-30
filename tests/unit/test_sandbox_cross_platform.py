@@ -25,45 +25,52 @@ def test_sandbox_unsupported_platform(monkeypatch: pytest.MonkeyPatch) -> None:
         manager.execute(["echo", "hello"], "/tmp")
 
 
-def test_sandbox_linux_unsupported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Linux must return unavailable capabilities and fail closed with SandboxError.
+def test_sandbox_linux_platform_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux platform selection instantiates LinuxSandboxBackend."""
+    from velix_agent.sandbox.backends.linux import LinuxSandboxBackend
 
-    Proves that a requested command is never executed on Linux and no unrestricted
-    subprocess fallback occurs.
-    """
     monkeypatch.setattr(platform, "system", lambda: "Linux")
-
     manager = SandboxManager()
-    assert manager.backend is None
+    assert isinstance(manager.backend, LinuxSandboxBackend)
 
-    caps = manager.get_capabilities()
-    for field_name in (
-        "filesystem_isolation",
-        "network_isolation",
-        "cpu_limit",
-        "memory_limit",
-        "process_limit",
-        "timeout",
-        "output_limit",
-        "secret_filtering",
-        "disk_limit",
-        "runtime_isolation",
-        "observability",
-        "security_hardening",
-    ):
-        assert getattr(caps, field_name) == "NOT_AVAILABLE"
 
-    # Command that would create a marker file if executed
-    canary_file = tmp_path / "canary_linux_executed.txt"
-    command = [sys.executable, "-c", f"open({str(canary_file)!r}, 'w').write('executed')"]
+def test_sandbox_linux_missing_bwrap_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Linux without Bubblewrap must return unavailable capabilities and fail closed.
 
-    with pytest.raises(
-        SandboxError, match=r"Sandbox backend unavailable for platform: Linux"
-    ):
-        manager.execute(command, tmp_path)
+    Proves that a requested command is never executed on Linux when bwrap is missing
+    and no unrestricted subprocess fallback occurs.
+    """
+    from unittest.mock import patch
 
-    # Prove command was NEVER executed (fail-closed, no unrestricted fallback)
-    assert not canary_file.exists(), "Command was executed despite Linux being unsupported!"
+    from velix_agent.sandbox.backends.linux import LinuxSandboxBackend
+
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    with patch("shutil.which", return_value=None):
+        manager = SandboxManager()
+        assert isinstance(manager.backend, LinuxSandboxBackend)
+
+        caps = manager.get_capabilities()
+        for field_name in (
+            "filesystem_isolation",
+            "network_isolation",
+            "cpu_limit",
+            "memory_limit",
+            "process_limit",
+        ):
+            assert getattr(caps, field_name) == "NOT_AVAILABLE"
+
+        # Command that would create a marker file if executed
+        canary_file = tmp_path / "canary_linux_executed.txt"
+        command = [sys.executable, "-c", f"open({str(canary_file)!r}, 'w').write('executed')"]
+
+        err_match = r"Capability 'filesystem_isolation' is required.*NOT_AVAILABLE|Bubblewrap"
+        with pytest.raises(SandboxError, match=err_match):
+            manager.execute(command, tmp_path)
+
+        # Prove command was NEVER executed (fail-closed, no unrestricted fallback)
+        assert not canary_file.exists(), "Command was executed despite missing Bubblewrap!"
 
 
 def test_sandbox_capabilities() -> None:
@@ -75,7 +82,7 @@ def test_sandbox_capabilities() -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_cross_platform_basic_execution(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -89,7 +96,7 @@ def test_sandbox_cross_platform_basic_execution(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_cross_platform_timeout(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -111,7 +118,7 @@ def test_sandbox_cross_platform_timeout(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_cross_platform_workspace_restriction(tmp_path: Path) -> None:
     # Basic check that the process starts in the workspace
@@ -132,7 +139,7 @@ def test_sandbox_cross_platform_workspace_restriction(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_network_isolation_enforcement(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -159,7 +166,7 @@ def test_sandbox_network_isolation_enforcement(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_disk_limit_unsupported() -> None:
     manager = SandboxManager()
@@ -319,7 +326,7 @@ def test_backend_read_stream_output_limits() -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_small_output_limit(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -347,7 +354,7 @@ def test_sandbox_functional_small_output_limit(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_large_output_limit_no_truncation(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -369,7 +376,7 @@ def test_sandbox_functional_large_output_limit_no_truncation(tmp_path: Path) -> 
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_zero_output_limit(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -406,7 +413,7 @@ def test_sandbox_functional_zero_output_limit(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_independent_stream_limits(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -437,7 +444,7 @@ def test_sandbox_functional_independent_stream_limits(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_continuous_output_timeout_and_memory_bounded(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -466,7 +473,7 @@ def test_sandbox_functional_continuous_output_timeout_and_memory_bounded(tmp_pat
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_output_exact_boundary(tmp_path: Path) -> None:
     """Verify that output exactly equal to max_output_size is not marked truncated."""
@@ -494,7 +501,7 @@ def test_sandbox_functional_output_exact_boundary(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_output_boundary_plus_one(tmp_path: Path) -> None:
     """Verify that output of max_output_size + 1 is truncated to max_output_size."""
@@ -525,7 +532,7 @@ def test_sandbox_functional_output_boundary_plus_one(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_output_utf8_multibyte_truncation(tmp_path: Path) -> None:
     """Verify multi-byte UTF-8 output truncation handles byte boundaries and markers cleanly."""
@@ -583,7 +590,7 @@ def test_sandbox_functional_output_utf8_multibyte_truncation(tmp_path: Path) -> 
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_stderr_exact_boundary_and_truncation(tmp_path: Path) -> None:
     """Verify stderr stream truncation behavior independently at exact and overflow boundaries."""
@@ -744,7 +751,7 @@ def test_sandbox_explicit_cpu_limit_balanced_mode_tolerates_partial(tmp_path: Pa
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_timeout_with_detached_descendant(tmp_path: Path) -> None:
     """Verify timeout handling returns boundedly even if a descendant detaches and survives."""
@@ -809,7 +816,7 @@ def test_sandbox_timeout_with_detached_descendant(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_normal_root_exit_with_background_descendant(tmp_path: Path) -> None:
     """Verify normal root exit returns boundedly and captures output when descendant survives."""
@@ -872,3 +879,105 @@ def test_sandbox_normal_root_exit_with_background_descendant(tmp_path: Path) -> 
                 pass
             with contextlib.suppress(OSError):
                 pid_file.unlink()
+
+
+# ---------------------------------------------------------------------------
+# Workspace-root validation regression tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "root_path",
+    [
+        "/",
+        "\\",
+        Path("/"),
+        "C:\\",
+        "c:/",
+        "C:",
+        "D:\\",
+        "d:/",
+        "\\\\server\\share",
+        "\\\\server\\share\\",
+    ],
+)
+def test_sandbox_workspace_root_rejects_filesystem_roots(root_path: str | Path) -> None:
+    """Filesystem roots (POSIX '/', Windows drive roots, and UNC roots) must be rejected."""
+    manager = SandboxManager()
+    with pytest.raises(SandboxError, match="filesystem root is not allowed"):
+        manager.execute(["echo", "hi"], root_path, mode="BALANCED")
+
+
+def test_sandbox_workspace_root_rejects_home_directory() -> None:
+    """The current user's home directory must be rejected as a workspace root."""
+    manager = SandboxManager()
+
+    # Test Path.home(), str(Path.home()), and "~"
+    with pytest.raises(SandboxError, match="user home directory is not allowed"):
+        manager.execute(["echo", "hi"], Path.home(), mode="BALANCED")
+
+    with pytest.raises(SandboxError, match="user home directory is not allowed"):
+        manager.execute(["echo", "hi"], str(Path.home()), mode="BALANCED")
+
+    with pytest.raises(SandboxError, match="user home directory is not allowed"):
+        manager.execute(["echo", "hi"], "~", mode="BALANCED")
+
+
+def test_sandbox_workspace_root_rejects_home_case_insensitive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Case variations of home directory must be rejected (especially for Windows / macOS)."""
+    manager = SandboxManager()
+
+    # 1. Lowercase variation of actual home
+    home_str = str(Path.home().resolve())
+    with pytest.raises(SandboxError, match="user home directory is not allowed"):
+        manager.execute(["echo", "hi"], home_str.lower(), mode="BALANCED")
+
+    # 2. Simulated Windows USERPROFILE / HOME case-insensitivity
+    fake_user_dir = tmp_path / "MockUser"
+    fake_user_dir.mkdir()
+    monkeypatch.setenv("USERPROFILE", str(fake_user_dir))
+    monkeypatch.setenv("HOME", str(fake_user_dir))
+
+    with pytest.raises(SandboxError, match="user home directory is not allowed"):
+        manager.execute(["echo", "hi"], str(fake_user_dir).lower(), mode="BALANCED")
+
+
+def test_sandbox_workspace_root_rejects_nonexistent_directory(tmp_path: Path) -> None:
+    """Non-existent directories must be rejected with an invalid workspace root error."""
+    manager = SandboxManager()
+    nonexistent = tmp_path / "does_not_exist_12345"
+    with pytest.raises(SandboxError, match="Invalid workspace root"):
+        manager.execute(["echo", "hi"], nonexistent, mode="BALANCED")
+
+
+def test_sandbox_workspace_root_accepts_valid_nested_directory(tmp_path: Path) -> None:
+    """Valid nested project directories must be accepted and successfully executed."""
+    manager = SandboxManager()
+    allow_net = manager.get_capabilities().network_isolation == "UNSUPPORTED"
+
+    nested_ws = tmp_path / "projects" / "my_app"
+    nested_ws.mkdir(parents=True)
+
+    result = manager.execute(
+        ["echo", "nested_success"],
+        nested_ws,
+        allow_network=allow_net,
+        mode="BALANCED",
+    )
+    assert result.exit_code == 0
+    assert "nested_success" in result.stdout
+
+
+def test_sandbox_workspace_root_fail_closed_unsupported_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dangerous roots passed to unsupported platforms must fail closed with backend unavailable."""
+    monkeypatch.setattr(platform, "system", lambda: "UnknownOS")
+    manager = SandboxManager()
+    assert manager.backend is None
+
+    # Even if '/' is passed, fail-closed platform rejection must take precedence
+    with pytest.raises(SandboxError, match="Sandbox backend unavailable for platform: UnknownOS"):
+        manager.execute(["echo", "hi"], "/")

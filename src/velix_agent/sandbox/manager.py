@@ -1,4 +1,7 @@
+import contextlib
+import os
 import platform
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -15,9 +18,10 @@ class SandboxManager:
 
     Supported platforms:
       - macOS (Darwin): Apple Seatbelt (sandbox-exec) backend
+      - Linux: Bubblewrap (bwrap) backend
       - Windows: Win32 Job Object backend
 
-    Linux and other platforms are unsupported and fail closed with SandboxError.
+    Other platforms are unsupported and fail closed with SandboxError.
     """
 
     backend: SandboxBackend | None
@@ -31,6 +35,10 @@ class SandboxManager:
                 from velix_agent.sandbox.backends.macos import MacOSSandboxBackend
 
                 self.backend = MacOSSandboxBackend()
+            elif sys_name == "Linux":
+                from velix_agent.sandbox.backends.linux import LinuxSandboxBackend
+
+                self.backend = LinuxSandboxBackend()
             elif sys_name == "Windows":
                 from velix_agent.sandbox.backends.windows import WindowsSandboxBackend
 
@@ -120,6 +128,85 @@ class SandboxManager:
                         f"Capability '{cap_name}' is only PARTIALLY_SUPPORTED."
                     )
 
+    @staticmethod
+    def _is_filesystem_root(path: Path | str) -> bool:
+        """Check if path is a filesystem root (POSIX root, Windows drive root, or UNC root)."""
+        raw_str = str(path).strip()
+        if re.match(r"^[a-zA-Z]:[\\/]*$", raw_str):
+            return True
+        if re.match(r"^\\\\[^\\]+\\[^\\]+[\\/]*$", raw_str):
+            return True
+        if raw_str in ("/", "\\"):
+            return True
+
+        p = Path(path)
+        if p.parent == p:
+            return True
+        if p.anchor and p == Path(p.anchor):
+            return True
+
+        resolved = p.resolve()
+        if resolved.parent == resolved:
+            return True
+        if resolved.anchor and resolved == Path(resolved.anchor):
+            return True
+        res_str = str(resolved).rstrip("\\/")
+        anc_str = resolved.anchor.rstrip("\\/")
+        return bool(anc_str and res_str.lower() == anc_str.lower())
+
+    @staticmethod
+    def _is_home_directory(path: Path | str) -> bool:
+        """Check if path refers to the current user's home directory."""
+        p = Path(path).resolve()
+
+        home_candidates: list[Path] = []
+        with contextlib.suppress(Exception):
+            home_candidates.append(Path.home().resolve())
+        if os.environ.get("HOME"):
+            with contextlib.suppress(Exception):
+                home_candidates.append(Path(os.environ["HOME"]).resolve())
+        if os.environ.get("USERPROFILE"):
+            with contextlib.suppress(Exception):
+                home_candidates.append(Path(os.environ["USERPROFILE"]).resolve())
+
+        for home in home_candidates:
+            if p == home:
+                return True
+            # Case-insensitive comparison for Windows and case-insensitive/preserving filesystems
+            norm_p = str(p).replace("/", "\\").lower()
+            norm_home = str(home).replace("/", "\\").lower()
+            if norm_p == norm_home:
+                return True
+            with contextlib.suppress(OSError, ValueError):
+                if p.exists() and home.exists() and os.path.samefile(p, home):
+                    return True
+
+        return False
+
+    def _validate_workspace_root(self, workspace_root: str | Path) -> Path:
+        """Validate that workspace_root is an existing directory and not a dangerous root."""
+        raw_path = Path(workspace_root)
+        if self._is_filesystem_root(workspace_root) or self._is_filesystem_root(raw_path):
+            raise SandboxError(
+                f"Invalid workspace root '{workspace_root}': filesystem root is not allowed"
+            )
+
+        root = raw_path.expanduser().resolve()
+        if self._is_filesystem_root(root):
+            raise SandboxError(
+                f"Invalid workspace root '{workspace_root}': filesystem root is not allowed"
+            )
+
+        if not root.is_dir():
+            raise SandboxError(f"Invalid workspace root: {root}")
+
+        if self._is_home_directory(root) or self._is_home_directory(workspace_root):
+            raise SandboxError(
+                f"Invalid workspace root '{workspace_root}': user home directory is not allowed"
+            )
+
+        return root
+
     def execute(
         self,
         command: list[str],
@@ -155,16 +242,9 @@ class SandboxManager:
 
         if self.backend is None:
             sys_name = platform.system()
-            if sys_name == "Linux":
-                raise SandboxError(
-                    "Sandbox backend unavailable for platform: Linux. "
-                    "Linux is not a supported sandbox platform (supported: macOS, Windows)."
-                )
             raise SandboxError(f"Sandbox backend unavailable for platform: {sys_name}")
 
-        root = Path(workspace_root).resolve()
-        if not root.is_dir():
-            raise SandboxError(f"Invalid workspace root: {root}")
+        root = self._validate_workspace_root(workspace_root)
 
         from velix_agent.sandbox.policy import SandboxPolicyMode
         from velix_agent.sandbox.secrets import SecretStore
@@ -210,8 +290,10 @@ class SandboxManager:
             result.duration = duration
 
             if policy.secret_filtering:
-                result.stdout = local_store.redact(result.stdout)
-                result.stderr = local_store.redact(result.stderr)
+                stdout_truncated = result.truncation_status.get("stdout", False)
+                stderr_truncated = result.truncation_status.get("stderr", False)
+                result.stdout = local_store.redact(result.stdout, truncated=stdout_truncated)
+                result.stderr = local_store.redact(result.stderr, truncated=stderr_truncated)
                 result.command = [local_store.redact(c) for c in result.command]
 
             return result

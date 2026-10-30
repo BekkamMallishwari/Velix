@@ -921,3 +921,153 @@ def test_bwrap_systemd_scope_cleanup_timeout_suppressed(
         assert "stop" in stop_cmd
         assert "--no-ask-password" in stop_cmd
         assert systemctl_kwargs[1].get("timeout") == 5
+
+
+# ---------------------------------------------------------------------------
+# Linux SandboxManager integration & hardening tests
+# ---------------------------------------------------------------------------
+
+
+def test_manager_linux_missing_bwrap_fails_closed(
+    clean_systemd_cache: typing.Any, tmp_path: Path
+) -> None:
+    """Manager on Linux fails closed in STRICT mode when bwrap is not installed."""
+    with patch("shutil.which", return_value=None), \
+         patch("platform.system", return_value="Linux"):
+        manager = SandboxManager()
+        assert isinstance(manager.backend, LinuxSandboxBackend)
+
+        caps = manager.get_capabilities()
+        assert caps.filesystem_isolation == "NOT_AVAILABLE"
+
+        err_match = (
+            r"Capability 'filesystem_isolation' is required in STRICT mode but is NOT_AVAILABLE"
+        )
+        with pytest.raises(SandboxError, match=err_match):
+            manager.execute(["echo", "blocked"], workspace_root=tmp_path, mode="STRICT")
+
+
+def test_manager_linux_unavailable_netns_fails_closed_when_network_disallowed(
+    clean_systemd_cache: typing.Any, tmp_path: Path
+) -> None:
+    """When network namespaces are unavailable, disallowing network must fail closed."""
+    def mock_which(cmd: str) -> str | None:
+        return "/usr/bin/bwrap" if cmd == "bwrap" else None
+
+    with patch("shutil.which", side_effect=mock_which), \
+         patch("platform.system", return_value="Linux"), \
+         patch.object(LinuxSandboxBackend, "_detect_bwrap_execution", return_value=True), \
+         patch.object(LinuxSandboxBackend, "_detect_unshare_net", return_value=False):
+
+        manager = SandboxManager()
+        caps = manager.get_capabilities()
+        assert caps.filesystem_isolation == "SUPPORTED"
+        assert caps.network_isolation == "UNSUPPORTED"
+
+        # STRICT mode with allow_network=False requires network_isolation -> fails closed
+        strict_err = (
+            r"Capability 'network_isolation' is required in STRICT mode but is UNSUPPORTED"
+        )
+        with pytest.raises(SandboxError, match=strict_err):
+            manager.execute(
+                ["echo", "net"], workspace_root=tmp_path, mode="STRICT", allow_network=False
+            )
+
+        # BALANCED mode with allow_network=False also requires network_isolation -> fails closed
+        balanced_err = (
+            r"Capability 'network_isolation' is required in BALANCED mode but is UNSUPPORTED"
+        )
+        with pytest.raises(SandboxError, match=balanced_err):
+            manager.execute(
+                ["echo", "net"], workspace_root=tmp_path, mode="BALANCED", allow_network=False
+            )
+
+
+def test_manager_linux_supported_execution_with_secrets_and_truncation(
+    clean_systemd_cache: typing.Any, tmp_path: Path
+) -> None:
+    """Verify Linux execution through SandboxManager preserves secrets redaction and truncation."""
+    from velix_agent.sandbox.result import OUTPUT_TRUNCATION_MARKER
+
+    secret_val = "linux_super_secret_tok"
+
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("platform.system", return_value="Linux"), \
+         patch.object(LinuxSandboxBackend, "_detect_bwrap_execution", return_value=True), \
+         patch.object(LinuxSandboxBackend, "_detect_unshare_net", return_value=True), \
+         patch.object(LinuxSandboxBackend, "execute") as mock_exec:
+
+        mock_exec.return_value = SandboxResult(
+            stdout=f"Output with {secret_val} tail" + OUTPUT_TRUNCATION_MARKER,
+            stderr=f"Err {secret_val}",
+            exit_code=0,
+            command=["echo", secret_val],
+            truncation_status={"stdout": True, "stderr": False},
+        )
+
+        manager = SandboxManager()
+        res = manager.execute(
+            ["echo", secret_val],
+            workspace_root=tmp_path,
+            mode="STRICT",
+            secrets={"MY_SECRET": secret_val},
+        )
+
+        assert secret_val not in res.stdout
+        assert secret_val not in res.stderr
+        assert secret_val not in res.command[1]
+        assert "***REDACTED***" in res.stdout
+        assert "***REDACTED***" in res.stderr
+        assert "***REDACTED***" in res.command[1]
+        assert OUTPUT_TRUNCATION_MARKER in res.stdout
+
+
+def test_manager_linux_workspace_root_validation_preserved(
+    clean_systemd_cache: typing.Any
+) -> None:
+    """Linux execution preserves workspace root validation (rejects / and home)."""
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("platform.system", return_value="Linux"), \
+         patch.object(LinuxSandboxBackend, "_detect_bwrap_execution", return_value=True), \
+         patch.object(LinuxSandboxBackend, "_detect_unshare_net", return_value=True):
+
+        manager = SandboxManager()
+
+        # Filesystem root must be rejected
+        with pytest.raises(SandboxError, match="filesystem root is not allowed"):
+            manager.execute(["echo", "root"], workspace_root="/")
+
+        # User home directory must be rejected
+        with pytest.raises(SandboxError, match="user home directory is not allowed"):
+            manager.execute(["echo", "home"], workspace_root=Path.home())
+
+
+def test_linux_backend_process_group_termination_on_timeout(tmp_path: Path) -> None:
+    """Verify backend sends SIGKILL to process group on timeout."""
+    import io
+    import signal
+    import subprocess
+
+    backend = LinuxSandboxBackend()
+    policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
+
+    mock_proc = MagicMock()
+    mock_proc.pid = 99999
+    mock_proc.poll.return_value = None
+    mock_proc.wait.side_effect = [
+        subprocess.TimeoutExpired(cmd=["sleep", "60"], timeout=1),
+        0,
+    ]
+    mock_proc.stdout = io.BytesIO(b"")
+    mock_proc.stderr = io.BytesIO(b"")
+
+    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+         patch("platform.system", return_value="Linux"), \
+         patch("subprocess.Popen", return_value=mock_proc), \
+         patch("os.killpg") as mock_killpg:
+
+        res = backend.execute(["sleep", "60"], policy, timeout=1)
+
+        assert res.exit_code == -1
+        assert "timed out" in res.stderr
+        mock_killpg.assert_called_once_with(99999, signal.SIGKILL)

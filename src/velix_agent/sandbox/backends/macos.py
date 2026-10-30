@@ -233,44 +233,95 @@ class MacOSSandboxBackend(SandboxBackend):
                 PIDs via pgrep while the parent hierarchy is still intact, and send
                 SIGKILL to each discovered descendant individually, in addition to
                 signaling the root process group.
+
+                When root_pid has already exited (e.g. normal completion after spawning
+                background descendants), pgrep -P root_pid will not find orphaned
+                descendants because launchd (PID 1) adopts them. However, sandbox-created
+                background descendants remain in the root process group unless setsid()
+                was called. We discover members of root_pid's process group via pgrep -g
+                and recursively reap any of their children before killing the entire
+                process group with os.killpg().
                 """
-                descendants: list[int] = []
+                if not isinstance(root_pid, int) or root_pid <= 1:
+                    return
+
+                descendants: set[int] = set()
 
                 def _collect_descendants(p: int) -> None:
+                    if p <= 1:
+                        return
                     try:
                         res = subprocess.run(
-                            ["pgrep", "-P", str(p)], capture_output=True, text=True, timeout=1.0
+                            ["pgrep", "-P", str(p)],
+                            capture_output=True,
+                            text=True,
+                            timeout=1.0,
                         )
                         for pid_str in res.stdout.split():
                             if pid_str.isdigit():
                                 child_pid = int(pid_str)
-                                descendants.append(child_pid)
-                                _collect_descendants(child_pid)
+                                if (
+                                    child_pid > 1
+                                    and child_pid != os.getpid()
+                                    and child_pid not in descendants
+                                ):
+                                    descendants.add(child_pid)
+                                    _collect_descendants(child_pid)
                     except Exception:
                         pass
 
+                # 1. Discover descendants via parent-child hierarchy
+                # (effective if parent is alive)
                 _collect_descendants(root_pid)
 
-                for d in descendants:
-                    with contextlib.suppress(Exception):
-                        os.kill(d, signal.SIGKILL)  # type: ignore[attr-defined]
+                # 2. Discover descendants in the root process group
+                # (effective even after parent exits)
+                try:
+                    res_pg = subprocess.run(
+                        ["pgrep", "-g", str(root_pid)],
+                        capture_output=True,
+                        text=True,
+                        timeout=1.0,
+                    )
+                    for pid_str in res_pg.stdout.split():
+                        if pid_str.isdigit():
+                            pg_pid = int(pid_str)
+                            if (
+                                pg_pid > 1
+                                and pg_pid != os.getpid()
+                                and pg_pid not in descendants
+                            ):
+                                descendants.add(pg_pid)
+                                _collect_descendants(pg_pid)
+                except Exception:
+                    pass
 
-                with contextlib.suppress(Exception):
+                # 3. Terminate individually discovered descendant PIDs
+                for d in descendants:
+                    if d != root_pid:
+                        with contextlib.suppress(OSError):
+                            os.kill(d, signal.SIGKILL)  # type: ignore[attr-defined]
+
+                # 4. Terminate the root process group as a whole
+                with contextlib.suppress(OSError):
                     os.killpg(root_pid, signal.SIGKILL)  # type: ignore[attr-defined]
 
             timeout_expired = False
             try:
-                process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timeout_expired = True
-                _terminate_process_tree(process.pid)
                 try:
-                    process.wait(timeout=2.0)
+                    process.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
-                    with contextlib.suppress(Exception):
-                        process.kill()
-                    with contextlib.suppress(Exception):
-                        process.wait(timeout=1.0)
+                    timeout_expired = True
+                    _terminate_process_tree(process.pid)
+                    try:
+                        process.wait(timeout=2.0)
+                    except subprocess.TimeoutExpired:
+                        with contextlib.suppress(Exception):
+                            process.kill()
+                        with contextlib.suppress(Exception):
+                            process.wait(timeout=1.0)
+            finally:
+                _terminate_process_tree(process.pid)
 
             # Bound thread joins to avoid indefinite hangs if surviving or
             # detached descendants retain inherited pipe write handles.

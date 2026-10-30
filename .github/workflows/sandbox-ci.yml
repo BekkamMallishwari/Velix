@@ -2,9 +2,13 @@
 # yamllint disable rule:line-length
 name: Sandbox CI
 
-# Unified cross-platform sandbox CI workflow testing macOS and Windows as the only supported platforms.
+# Unified cross-platform sandbox CI workflow testing Linux, macOS, and Windows.
 #
 # PLATFORM CAPABILITIES & LIMITATIONS:
+#   - Linux:
+#       * Backend: Bubblewrap (bwrap) with unprivileged namespaces.
+#       * Filesystem & network isolation: SUPPORTED.
+#       * Resource limits: timeout=SUPPORTED, cgroups=DETECTED (informational, not yet enforced).
 #   - macOS:
 #       * Backend: Apple sandbox-exec (Seatbelt) profile generation.
 #       * Filesystem & network isolation: SUPPORTED.
@@ -18,8 +22,6 @@ name: Sandbox CI
 #       * Process limits & timeout: SUPPORTED (Job Object handles process containment & termination).
 #       * Filesystem & network isolation: UNSUPPORTED (no AppContainer or WFP firewall yet).
 #       * Tests requiring unsupported isolation are capability-skipped; skips are NOT proof of support.
-#   - Linux:
-#       * UNSUPPORTED: Linux is not a supported sandbox platform. Requests fail closed with SandboxError.
 
 'on':
   push:
@@ -44,6 +46,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: Linux
+            os: ubuntu-22.04
+            backend_test: tests/unit/test_sandbox_linux.py
           - name: macOS
             os: macos-latest
             backend_test: tests/unit/test_sandbox_macos.py
@@ -66,10 +71,39 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Platform-specific system dependencies
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y bubblewrap
+
       # Install project and dev dependencies using uv into system environment
       - name: Install Python dependencies
         run: |
           uv pip install --system -e ".[dev]"
+
+      # Linux prerequisites & security guards
+      - name: Verify bwrap functional sandbox execution (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          which bwrap || (echo "ERROR: bwrap not found after installation" && exit 1)
+          bwrap --version
+          # Verify unprivileged user namespace and filesystem bind container execution
+          bwrap --ro-bind / / -- true || (echo "ERROR: bwrap container execution failed" && exit 1)
+          # Verify unprivileged network namespace container execution
+          bwrap --unshare-net --ro-bind / / -- true || (echo "ERROR: bwrap unshare-net execution failed" && exit 1)
+
+      - name: Detect systemd-run cgroup availability (Linux, informational only)
+        if: runner.os == 'Linux'
+        run: |
+          if systemd-run --user --scope --quiet --no-ask-password -p MemoryMax=1M true 2>/dev/null; then
+            echo "SYSTEMD_CGROUPS_AVAILABLE=true" >> "$GITHUB_ENV"
+            echo "INFO: systemd cgroups are available on this runner (not yet enforced)."
+          else
+            echo "SYSTEMD_CGROUPS_AVAILABLE=false" >> "$GITHUB_ENV"
+            echo "INFO: systemd cgroups are NOT available. Linux cgroup limits are not yet implemented."
+          fi
 
       # macOS prerequisites & security guards
       - name: Verify sandbox-exec is available (macOS)
@@ -98,6 +132,66 @@ jobs:
         run: |
           python -m pytest ${{ matrix.backend_test }} -v --tb=short
 
+      # Real Bubblewrap integration tests on Linux (strictly enforced, no skips allowed)
+      - name: Run real Bubblewrap integration tests (strictly enforced, Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python -c "
+          import sys, pytest
+
+          class StrictCountPlugin:
+              def __init__(self):
+                  self.passed = 0
+                  self.failed = 0
+                  self.skipped = 0
+                  self._seen = set()
+
+              def pytest_runtest_logreport(self, report):
+                  # Count each test nodeid exactly once.
+                  # Setup-phase skips (skipif markers) never produce a 'call'
+                  # report, so we catch them in 'setup'. Call-phase outcomes
+                  # (pass/fail/pytest.skip() in body) are caught in 'call'.
+                  # Teardown is never used for counting.
+                  if report.nodeid in self._seen:
+                      return
+                  if report.when == 'call':
+                      self._seen.add(report.nodeid)
+                      if report.passed:
+                          self.passed += 1
+                      elif report.failed:
+                          self.failed += 1
+                      elif report.skipped:
+                          self.skipped += 1
+                  elif report.when == 'setup' and report.skipped:
+                      self._seen.add(report.nodeid)
+                      self.skipped += 1
+
+          node_ids = [
+              'tests/unit/test_sandbox_linux.py::test_linux_backend_execution',
+              'tests/unit/test_sandbox_linux.py::test_linux_backend_git_directory_isolation_real',
+              'tests/unit/test_sandbox_linux.py::test_linux_backend_git_worktree_file_isolation_real',
+              'tests/unit/test_sandbox_linux.py::test_linux_backend_git_missing_isolation_real',
+          ]
+
+          plugin = StrictCountPlugin()
+          exit_code = pytest.main(['-v', '-ra', '--tb=short', *node_ids], plugins=[plugin])
+
+          print(f'Results: passed={plugin.passed}, failed={plugin.failed}, skipped={plugin.skipped}')
+          if exit_code != 0:
+              print(f'ERROR: pytest exited with code {exit_code}')
+              sys.exit(exit_code or 1)
+          if plugin.failed > 0:
+              print(f'ERROR: {plugin.failed} real integration test(s) failed')
+              sys.exit(1)
+          if plugin.skipped > 0:
+              print(f'ERROR: {plugin.skipped} real integration test(s) were skipped; all must execute')
+              sys.exit(1)
+          if plugin.passed != 4:
+              print(f'ERROR: Expected 4 passed tests, got {plugin.passed}')
+              sys.exit(1)
+          print('SUCCESS: All 4 real Bubblewrap integration tests executed and passed.')
+          "
+
       # Cross-platform sandbox tests (run on all platforms)
       - name: Run cross-platform sandbox tests
         run: |
@@ -123,8 +217,8 @@ jobs:
         run: |
           ruff check tests/sandbox/
 
-      - name: Run Mypy (macOS)
-        if: runner.os == 'macOS'
+      - name: Run Mypy (POSIX)
+        if: runner.os != 'Windows'
         run: |
           mypy src/velix_agent/sandbox/
 

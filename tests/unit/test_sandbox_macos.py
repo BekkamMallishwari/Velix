@@ -1,3 +1,4 @@
+import contextlib
 import os
 import platform
 import shutil
@@ -316,18 +317,19 @@ def test_sandbox_runaway_child(macos_backend: MacOSSandboxBackend, policy: Sandb
 
     # Spawn a child that ignores signals or sleeps long, then parent exits
     script = (
-        "import subprocess, sys\\n"
-        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10.12345)'])\\n"
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10.12345)'])\n"
     )
 
     cmd = [sys.executable, "-c", script]
 
     t0 = time.time()
-    _res = macos_backend.execute(cmd, policy, timeout=1)
+    res = macos_backend.execute(cmd, policy, timeout=1)
     t1 = time.time()
 
     # Process should exit quickly, not wait 10s for the runaway child
     assert t1 - t0 < 5
+    assert res.exit_code == 0
 
     # Check that the runaway child is gone.
     # The parent process started python -c "import time; time.sleep(10.12345)"
@@ -339,6 +341,64 @@ def test_sandbox_runaway_child(macos_backend: MacOSSandboxBackend, policy: Sandb
     # To avoid matching our own pgrep command, we use [t]ime.sleep(10.12345)
     pgrep_res = subprocess.run(["pgrep", "-f", "[t]ime.sleep(10.12345)"], capture_output=True)
     assert pgrep_res.returncode != 0, "Runaway child survived the sandbox termination!"
+
+
+def test_macos_background_child_cleanup_on_normal_exit(
+    macos_backend: MacOSSandboxBackend, policy: SandboxPolicy
+) -> None:
+    """Regression test: verify that a background child spawned by a normally-exiting command
+    is reaped by backend process cleanup without relying on manual test cleanup.
+    """
+    import signal
+    import sys
+    import time
+
+    pid_file = policy.workspace_root / f"bg_child_{os.getpid()}.pid"
+    pid_file.unlink(missing_ok=True)
+
+    # The command launches a background sleeper, writes its PID to file,
+    # and exits normally (exit 0).
+    script = (
+        "import sys, subprocess\n"
+        "from pathlib import Path\n"
+        f"pid_file = Path({str(pid_file)!r})\n"
+        "sub = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        "pid_file.write_text(str(sub.pid))\n"
+        "sys.stdout.write('parent finished\\n')\n"
+    )
+
+    t0 = time.time()
+    try:
+        res = macos_backend.execute([sys.executable, "-c", script], policy, timeout=10)
+        elapsed = time.time() - t0
+
+        assert res.exit_code == 0
+        assert "parent finished" in res.stdout
+        assert elapsed < 5.0
+        assert pid_file.exists()
+
+        child_pid = int(pid_file.read_text().strip())
+        assert child_pid > 1
+
+        # Check whether the child process is alive right after execute() returns.
+        time.sleep(0.2)
+        try:
+            os.kill(child_pid, 0)
+            is_alive = True
+        except OSError:
+            is_alive = False
+
+        # Fail if the child survived — manual kill is only a fallback safety net
+        # to prevent leaking processes on test failure, never the reason the test passes.
+        if is_alive:
+            with contextlib.suppress(OSError):
+                os.kill(child_pid, signal.SIGKILL)
+
+        assert not is_alive, (
+            f"Background child PID {child_pid} survived normal sandbox completion!"
+        )
+    finally:
+        pid_file.unlink(missing_ok=True)
 
 
 def test_macos_detached_child_cleanup_on_timeout(
