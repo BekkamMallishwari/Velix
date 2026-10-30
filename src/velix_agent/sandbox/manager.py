@@ -1,5 +1,4 @@
 import contextlib
-import dataclasses
 import os
 import platform
 import re
@@ -245,19 +244,14 @@ class SandboxManager:
             sys_name = platform.system()
             raise SandboxError(f"Sandbox backend unavailable for platform: {sys_name}")
 
+        root = self._validate_workspace_root(workspace_root)
+
         from velix_agent.sandbox.policy import SandboxPolicyMode
         from velix_agent.sandbox.secrets import SecretStore
 
         policy_mode = SandboxPolicyMode[mode]
-
-        # Validate capabilities before resolving the workspace root so that a
-        # STRICT-mode unsupported-capability error is raised first, regardless
-        # of whether the supplied workspace path is valid on this platform.
-        # _validate_capabilities only reads policy flags (mode, allow_network,
-        # cpu_limit, memory_limit, process_limit) and never reads workspace_root,
-        # so using a sentinel Path() here is safe.
         policy = SandboxPolicy(
-            workspace_root=Path(),
+            workspace_root=root,
             mode=policy_mode,
             allow_network=allow_network,
             max_execution_time=timeout,
@@ -267,10 +261,8 @@ class SandboxManager:
             process_limit=process_limit,
             cpu_limit=cpu_limit,
         )
-        self._validate_capabilities(policy)
 
-        root = self._validate_workspace_root(workspace_root)
-        policy = dataclasses.replace(policy, workspace_root=root)
+        self._validate_capabilities(policy)
 
         # Build injected environment using a strictly per-execution SecretStore
         local_store = SecretStore()

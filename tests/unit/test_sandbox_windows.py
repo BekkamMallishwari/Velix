@@ -616,23 +616,19 @@ def test_windows_workspace_root_rejects_userprofile_home(
         mgr._validate_workspace_root(str(fake_userprofile).lower())
 
 
-def test_windows_manager_strict_mode_rejects_unsupported_capabilities_early(
+def test_windows_manager_strict_mode_rejects_unsupported_capabilities(
     tmp_path: Path,
 ) -> None:
-    """STRICT mode must fail closed on unsupported capabilities before workspace resolution."""
+    """STRICT mode must fail closed on unsupported capabilities for valid workspaces."""
     backend = WindowsSandboxBackend()
     mgr = SandboxManager(backend=backend)
 
-    # Even if workspace_root points to an invalid/nonexistent path,
-    # the capability check must fail first with the unsupported capability error.
+    # Invalid workspace fails workspace validation first
     invalid_workspace = tmp_path / "nonexistent_dir_12345"
-    with pytest.raises(
-        SandboxError,
-        match="Capability 'filesystem_isolation' is required in STRICT mode but is UNSUPPORTED",
-    ):
+    with pytest.raises(SandboxError, match="Invalid workspace root"):
         mgr.execute(["echo", "hi"], workspace_root=invalid_workspace, mode="STRICT")
 
-    # With a valid workspace, it must also fail with the exact same capability error.
+    # With a valid workspace, capability check fails closed
     valid_workspace = tmp_path / "valid_dir"
     valid_workspace.mkdir()
     with pytest.raises(
