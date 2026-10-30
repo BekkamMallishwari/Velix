@@ -1,4 +1,5 @@
 import io
+import logging
 import platform
 import subprocess
 import sys
@@ -10,7 +11,7 @@ import pytest
 from velix_agent.sandbox.backends.windows import WindowsSandboxBackend
 from velix_agent.sandbox.manager import SandboxManager
 from velix_agent.sandbox.policy import SandboxPolicy
-from velix_agent.sandbox.result import SandboxError
+from velix_agent.sandbox.result import SandboxError, SandboxResult
 
 
 @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-specific tests")
@@ -636,3 +637,121 @@ def test_windows_manager_strict_mode_rejects_unsupported_capabilities(
         match="Capability 'filesystem_isolation' is required in STRICT mode but is UNSUPPORTED",
     ):
         mgr.execute(["echo", "hi"], workspace_root=valid_workspace, mode="STRICT")
+
+
+def test_windows_manager_balanced_mode_emits_warning_and_event_for_unsupported_fs(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """BALANCED mode on Windows emits structured warning and records security event."""
+    backend = WindowsSandboxBackend()
+    mgr = SandboxManager(backend=backend)
+
+    mock_result = SandboxResult(
+        stdout="success\n",
+        stderr="",
+        exit_code=0,
+        command=["cmd.exe", "/c", "echo", "success"],
+    )
+    with (
+        patch.object(backend, "execute", return_value=mock_result),
+        caplog.at_level(logging.WARNING, logger="sandbox.manager"),
+    ):
+        result = mgr.execute(
+            ["cmd.exe", "/c", "echo", "success"],
+            workspace_root=tmp_path,
+            mode="BALANCED",
+            allow_network=True,
+        )
+
+    # 1. Warning emitted with platform, policy mode, workspace, and host user notice
+    assert "Filesystem isolation is UNSUPPORTED" in caplog.text
+    assert "BALANCED" in caplog.text
+    assert "Filesystem access is not confined to workspace_root" in caplog.text
+    assert "Commands may access any files permitted to the host user." in caplog.text
+
+    # 2. Structured security event added to SandboxResult
+    matching_events = [ev for ev in result.security_events if "UNISOLATED_FILESYSTEM" in ev]
+    assert len(matching_events) == 1
+    event_str = matching_events[0]
+    assert "UNISOLATED_FILESYSTEM:" in event_str
+    assert "BALANCED" in event_str
+    assert str(tmp_path.resolve()) in event_str
+    assert "Commands may access any files permitted to the host user." in event_str
+
+
+def test_windows_manager_development_mode_emits_warning_and_event_for_unsupported_fs(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """DEVELOPMENT mode on Windows also emits warning and records security event."""
+    backend = WindowsSandboxBackend()
+    mgr = SandboxManager(backend=backend)
+
+    mock_result = SandboxResult(
+        stdout="dev\n",
+        stderr="",
+        exit_code=0,
+        command=["cmd.exe", "/c", "echo", "dev"],
+    )
+    with (
+        patch.object(backend, "execute", return_value=mock_result),
+        caplog.at_level(logging.WARNING, logger="sandbox.manager"),
+    ):
+        result = mgr.execute(
+            ["cmd.exe", "/c", "echo", "dev"],
+            workspace_root=tmp_path,
+            mode="DEVELOPMENT",
+            allow_network=True,
+        )
+
+    assert "DEVELOPMENT" in caplog.text
+    assert "Commands may access any files permitted to the host user." in caplog.text
+
+    matching_events = [ev for ev in result.security_events if "UNISOLATED_FILESYSTEM" in ev]
+    assert len(matching_events) == 1
+    assert "DEVELOPMENT" in matching_events[0]
+
+
+def test_manager_supported_fs_isolation_no_warning_or_event(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When filesystem isolation is SUPPORTED, no unisolated warning or event is produced."""
+    from velix_agent.sandbox.backends.base import SandboxBackend
+    from velix_agent.sandbox.policy import SandboxCapabilities
+
+    class MockSupportedBackend(SandboxBackend):
+        @classmethod
+        def get_capabilities(cls) -> SandboxCapabilities:
+            return SandboxCapabilities(
+                filesystem_isolation="SUPPORTED",
+                network_isolation="SUPPORTED",
+                cpu_limit="SUPPORTED",
+                memory_limit="SUPPORTED",
+                process_limit="SUPPORTED",
+                timeout="SUPPORTED",
+                output_limit="SUPPORTED",
+                secret_filtering="SUPPORTED",
+                disk_limit="UNSUPPORTED",
+                runtime_isolation="UNSUPPORTED",
+                observability="UNSUPPORTED",
+                security_hardening="UNSUPPORTED",
+            )
+
+        def execute(
+            self, command: list[str], policy: SandboxPolicy, timeout: int = 30
+        ) -> SandboxResult:
+            return SandboxResult(stdout="ok\n", stderr="", exit_code=0, command=command)
+
+    backend = MockSupportedBackend()
+    mgr = SandboxManager(backend=backend)
+
+    with caplog.at_level(logging.WARNING, logger="sandbox.manager"):
+        result = mgr.execute(
+            ["echo", "hello"],
+            workspace_root=tmp_path,
+            mode="BALANCED",
+            allow_network=True,
+        )
+
+    assert "UNISOLATED_FILESYSTEM" not in caplog.text
+    assert "Filesystem isolation is UNSUPPORTED" not in caplog.text
+    assert not any("UNISOLATED_FILESYSTEM" in ev for ev in result.security_events)

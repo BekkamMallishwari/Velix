@@ -1,5 +1,6 @@
 import contextlib
 import inspect
+import logging
 import os
 import platform
 import sys
@@ -9,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from velix_agent.sandbox.backends.base import SandboxBackend
 from velix_agent.sandbox.manager import SandboxManager
 from velix_agent.sandbox.policy import SandboxCapabilities, SandboxPolicy
 from velix_agent.sandbox.result import SandboxError, SandboxResult
@@ -996,3 +998,139 @@ def test_sandbox_workspace_root_fail_closed_unsupported_platform(
     # Even if '/' is passed, fail-closed platform rejection must take precedence
     with pytest.raises(SandboxError, match="Sandbox backend unavailable for platform: UnknownOS"):
         manager.execute(["echo", "hi"], "/")
+
+
+# ---------------------------------------------------------------------------
+# Filesystem-isolation transparency tests
+# ---------------------------------------------------------------------------
+
+
+class MockUnsupportedFsBackend(SandboxBackend):
+    @classmethod
+    def get_capabilities(cls) -> SandboxCapabilities:
+        return SandboxCapabilities(
+            filesystem_isolation="UNSUPPORTED",
+            network_isolation="SUPPORTED",
+            cpu_limit="SUPPORTED",
+            memory_limit="SUPPORTED",
+            process_limit="SUPPORTED",
+            timeout="SUPPORTED",
+            output_limit="SUPPORTED",
+            secret_filtering="SUPPORTED",
+            disk_limit="UNSUPPORTED",
+            runtime_isolation="UNSUPPORTED",
+            observability="UNSUPPORTED",
+            security_hardening="UNSUPPORTED",
+        )
+
+    def execute(
+        self, command: list[str], policy: SandboxPolicy, timeout: int = 30
+    ) -> SandboxResult:
+        return SandboxResult(stdout="mocked", stderr="", exit_code=0, command=command)
+
+
+class MockSupportedFsBackend(SandboxBackend):
+    @classmethod
+    def get_capabilities(cls) -> SandboxCapabilities:
+        return SandboxCapabilities(
+            filesystem_isolation="SUPPORTED",
+            network_isolation="SUPPORTED",
+            cpu_limit="SUPPORTED",
+            memory_limit="SUPPORTED",
+            process_limit="SUPPORTED",
+            timeout="SUPPORTED",
+            output_limit="SUPPORTED",
+            secret_filtering="SUPPORTED",
+            disk_limit="UNSUPPORTED",
+            runtime_isolation="UNSUPPORTED",
+            observability="UNSUPPORTED",
+            security_hardening="UNSUPPORTED",
+        )
+
+    def execute(
+        self, command: list[str], policy: SandboxPolicy, timeout: int = 30
+    ) -> SandboxResult:
+        return SandboxResult(stdout="mocked", stderr="", exit_code=0, command=command)
+
+
+def test_cross_platform_fs_isolation_unsupported_balanced_warning_and_event(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    backend = MockUnsupportedFsBackend()
+    mgr = SandboxManager(backend=backend)
+
+    with caplog.at_level(logging.WARNING, logger="sandbox.manager"):
+        result = mgr.execute(
+            ["echo", "hi"],
+            workspace_root=tmp_path,
+            mode="BALANCED",
+            allow_network=True,
+        )
+
+    assert "Filesystem isolation is UNSUPPORTED" in caplog.text
+    assert "BALANCED" in caplog.text
+    assert "Filesystem access is not confined to workspace_root" in caplog.text
+    assert "Commands may access any files permitted to the host user." in caplog.text
+
+    matching_events = [ev for ev in result.security_events if "UNISOLATED_FILESYSTEM" in ev]
+    assert len(matching_events) == 1
+    event_str = matching_events[0]
+    assert "UNISOLATED_FILESYSTEM:" in event_str
+    assert "BALANCED" in event_str
+    assert str(tmp_path.resolve()) in event_str
+    assert "Commands may access any files permitted to the host user." in event_str
+
+
+def test_cross_platform_fs_isolation_unsupported_development_warning_and_event(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    backend = MockUnsupportedFsBackend()
+    mgr = SandboxManager(backend=backend)
+
+    with caplog.at_level(logging.WARNING, logger="sandbox.manager"):
+        result = mgr.execute(
+            ["echo", "hi"],
+            workspace_root=tmp_path,
+            mode="DEVELOPMENT",
+            allow_network=True,
+        )
+
+    assert "Filesystem isolation is UNSUPPORTED" in caplog.text
+    assert "DEVELOPMENT" in caplog.text
+    assert "Commands may access any files permitted to the host user." in caplog.text
+
+    matching_events = [ev for ev in result.security_events if "UNISOLATED_FILESYSTEM" in ev]
+    assert len(matching_events) == 1
+    assert "DEVELOPMENT" in matching_events[0]
+
+
+def test_cross_platform_fs_isolation_unsupported_strict_rejects(
+    tmp_path: Path,
+) -> None:
+    backend = MockUnsupportedFsBackend()
+    mgr = SandboxManager(backend=backend)
+
+    with pytest.raises(
+        SandboxError,
+        match="Capability 'filesystem_isolation' is required in STRICT mode but is UNSUPPORTED",
+    ):
+        mgr.execute(["echo", "hi"], workspace_root=tmp_path, mode="STRICT")
+
+
+def test_cross_platform_fs_isolation_supported_no_warning_or_event(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    backend = MockSupportedFsBackend()
+    mgr = SandboxManager(backend=backend)
+
+    with caplog.at_level(logging.WARNING, logger="sandbox.manager"):
+        result = mgr.execute(
+            ["echo", "hi"],
+            workspace_root=tmp_path,
+            mode="BALANCED",
+            allow_network=True,
+        )
+
+    assert "UNISOLATED_FILESYSTEM" not in caplog.text
+    assert "Filesystem isolation is UNSUPPORTED" not in caplog.text
+    assert not any("UNISOLATED_FILESYSTEM" in ev for ev in result.security_events)

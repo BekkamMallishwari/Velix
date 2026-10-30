@@ -8,9 +8,12 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from velix_agent.sandbox.policy import SandboxCapabilities
 
+from velix_agent.core.logging import get_logger
 from velix_agent.sandbox.backends.base import SandboxBackend
 from velix_agent.sandbox.policy import SandboxPolicy
 from velix_agent.sandbox.result import SandboxError, SandboxResult
+
+logger = get_logger("sandbox.manager")
 
 
 class SandboxManager:
@@ -107,6 +110,16 @@ class SandboxManager:
                 )
 
         if policy.mode.name != "STRICT":
+            if caps.filesystem_isolation == "UNSUPPORTED":
+                sys_name = platform.system()
+                logger.warning(
+                    f"Filesystem isolation is UNSUPPORTED on {sys_name} "
+                    f"in {policy.mode.name} mode. "
+                    "Filesystem access is not confined to workspace_root "
+                    f"'{policy.workspace_root}'. "
+                    "Commands may access any files permitted to the host user."
+                )
+
             # Warn on any requested capability that is only partially supported
             requested_caps = ["timeout", "output_limit"]
             if not policy.allow_network:
@@ -288,6 +301,17 @@ class SandboxManager:
             result.execution_id = execution_id
             result.backend = backend_name
             result.duration = duration
+
+            caps = self.get_capabilities()
+            if policy.mode.name != "STRICT" and caps.filesystem_isolation == "UNSUPPORTED":
+                result.security_events.append(
+                    "UNISOLATED_FILESYSTEM: "
+                    f"Filesystem isolation is UNSUPPORTED on {platform.system()} "
+                    f"in {policy.mode.name} mode. "
+                    "Filesystem access is not confined to workspace_root "
+                    f"'{policy.workspace_root}'. "
+                    "Commands may access any files permitted to the host user."
+                )
 
             if policy.secret_filtering:
                 stdout_truncated = result.truncation_status.get("stdout", False)
