@@ -970,6 +970,21 @@ def test_sandbox_workspace_root_accepts_valid_nested_directory(tmp_path: Path) -
     assert "nested_success" in result.stdout
 
 
+def test_sandbox_workspace_root_relative_path_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Relative paths pointing to existing valid directories must be accepted."""
+    manager = SandboxManager()
+    project_dir = tmp_path / "valid_project"
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+
+    assert not SandboxManager._is_filesystem_root(".")
+    assert not SandboxManager._is_filesystem_root(Path("."))
+    resolved = manager._validate_workspace_root(".")
+    assert resolved == project_dir.resolve()
+
+
 def test_sandbox_workspace_root_fail_closed_unsupported_platform(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

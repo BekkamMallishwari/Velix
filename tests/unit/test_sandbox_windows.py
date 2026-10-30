@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from velix_agent.sandbox.backends.windows import WindowsSandboxBackend
+from velix_agent.sandbox.manager import SandboxManager
 from velix_agent.sandbox.policy import SandboxPolicy
 from velix_agent.sandbox.result import SandboxError
 
@@ -554,3 +555,88 @@ def test_windows_execute_truncation_markers_applied(tmp_path: Path) -> None:
     assert result.truncation_status == {"stdout": True, "stderr": True}
     assert result.stdout == "12345" + OUTPUT_TRUNCATION_MARKER
     assert result.stderr == "abcde" + OUTPUT_TRUNCATION_MARKER
+
+
+def test_windows_workspace_root_relative_path_not_filesystem_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify that relative path '.' in a valid project dir is not treated as a filesystem root."""
+    project_dir = tmp_path / "my_project"
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+
+    assert not SandboxManager._is_filesystem_root(".")
+    assert not SandboxManager._is_filesystem_root(Path("."))
+    assert not SandboxManager._is_filesystem_root("rel_subdir")
+
+    backend = WindowsSandboxBackend()
+    mgr = SandboxManager(backend=backend)
+    validated = mgr._validate_workspace_root(".")
+    assert validated == project_dir.resolve()
+
+
+def test_windows_workspace_root_rejects_drive_and_unc_roots() -> None:
+    """Verify Windows drive roots and UNC share roots are rejected as filesystem roots."""
+    backend = WindowsSandboxBackend()
+    mgr = SandboxManager(backend=backend)
+
+    dangerous_roots = [
+        "C:",
+        "C:\\",
+        "c:/",
+        "D:",
+        "D:\\",
+        "d:/",
+        "\\\\server\\share",
+        "\\\\server\\share\\",
+        "\\",
+    ]
+    for root in dangerous_roots:
+        assert SandboxManager._is_filesystem_root(root), f"Expected {root} to be a root"
+        with pytest.raises(SandboxError, match="filesystem root is not allowed"):
+            mgr._validate_workspace_root(root)
+
+
+def test_windows_workspace_root_rejects_userprofile_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify Windows USERPROFILE home directory is rejected case-insensitively."""
+    fake_userprofile = tmp_path / "Users" / "DevUser"
+    fake_userprofile.mkdir(parents=True)
+    monkeypatch.setenv("USERPROFILE", str(fake_userprofile))
+    monkeypatch.delenv("HOME", raising=False)
+
+    backend = WindowsSandboxBackend()
+    mgr = SandboxManager(backend=backend)
+
+    with pytest.raises(SandboxError, match="user home directory is not allowed"):
+        mgr._validate_workspace_root(fake_userprofile)
+
+    with pytest.raises(SandboxError, match="user home directory is not allowed"):
+        mgr._validate_workspace_root(str(fake_userprofile).lower())
+
+
+def test_windows_manager_strict_mode_rejects_unsupported_capabilities_early(
+    tmp_path: Path,
+) -> None:
+    """STRICT mode must fail closed on unsupported capabilities before workspace resolution."""
+    backend = WindowsSandboxBackend()
+    mgr = SandboxManager(backend=backend)
+
+    # Even if workspace_root points to an invalid/nonexistent path,
+    # the capability check must fail first with the unsupported capability error.
+    invalid_workspace = tmp_path / "nonexistent_dir_12345"
+    with pytest.raises(
+        SandboxError,
+        match="Capability 'filesystem_isolation' is required in STRICT mode but is UNSUPPORTED",
+    ):
+        mgr.execute(["echo", "hi"], workspace_root=invalid_workspace, mode="STRICT")
+
+    # With a valid workspace, it must also fail with the exact same capability error.
+    valid_workspace = tmp_path / "valid_dir"
+    valid_workspace.mkdir()
+    with pytest.raises(
+        SandboxError,
+        match="Capability 'filesystem_isolation' is required in STRICT mode but is UNSUPPORTED",
+    ):
+        mgr.execute(["echo", "hi"], workspace_root=valid_workspace, mode="STRICT")

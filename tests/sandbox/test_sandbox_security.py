@@ -584,7 +584,9 @@ def test_sandbox_child_process_cleanup(
 # ---------------------------------------------------------------------------
 
 
-def test_windows_filesystem_isolation_is_unsupported_not_silently_skipped() -> None:
+def test_windows_filesystem_isolation_is_unsupported_not_silently_skipped(
+    tmp_path: Path,
+) -> None:
     """Verify Windows explicitly reports filesystem_isolation=UNSUPPORTED.
 
     On Windows we must NOT assume isolation exists merely because tests were
@@ -608,7 +610,7 @@ def test_windows_filesystem_isolation_is_unsupported_not_silently_skipped() -> N
         SandboxError,
         match="Capability 'filesystem_isolation' is required in STRICT mode but is UNSUPPORTED",
     ):
-        mgr.execute(["echo", "hi"], workspace_root=".")
+        mgr.execute(["echo", "hi"], workspace_root=tmp_path)
 
 
 def test_sandbox_python_interpreter_mounted(
