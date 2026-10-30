@@ -196,6 +196,106 @@ class SandboxManager:
 
         return False
 
+    @staticmethod
+    def _clean_macos_data_volume(p_str: str) -> str:
+        lower = p_str.lower()
+        if lower == "/system/volumes/data":
+            return "/"
+        if lower.startswith("/system/volumes/data/"):
+            return p_str[len("/system/volumes/data") :]
+        return p_str
+
+    @classmethod
+    def _is_dangerous_system_path(cls, path: Path | str) -> bool:
+        """Check if path refers to a critical system directory or its descendant."""
+        raw_str = str(path).strip()
+        if not raw_str:
+            return False
+
+        norm_posix = raw_str.replace("\\", "/")
+        norm_posix = re.sub(r"/+", "/", norm_posix).rstrip("/")
+        if not norm_posix:
+            return False
+        lower_posix = cls._clean_macos_data_volume(norm_posix).lower()
+
+        for exact in ("/var", "/private/var"):
+            if lower_posix == exact.lower():
+                return True
+
+        dangerous_posix = (
+            "/etc",
+            "/bin",
+            "/sbin",
+            "/usr",
+            "/lib",
+            "/lib64",
+            "/lib32",
+            "/libx32",
+            "/dev",
+            "/proc",
+            "/sys",
+            "/boot",
+            "/root",
+            "/system",
+            "/library",
+            "/private/etc",
+            "/private/bin",
+            "/private/sbin",
+            "/private/var/db",
+            "/private/var/root",
+            "/var/db",
+            "/var/root",
+            "/var/log",
+            "/var/lib",
+            "/var/run",
+        )
+        for pfx in dangerous_posix:
+            if lower_posix == pfx or lower_posix.startswith(pfx + "/"):
+                return True
+
+        win_cleaned = raw_str.replace("\\", "/")
+        if win_cleaned.startswith(("//?/", "//./")):
+            win_cleaned = win_cleaned[4:]
+        win_cleaned = re.sub(r"^[a-zA-Z]:", "", win_cleaned)
+        if win_cleaned.startswith("/"):
+            win_norm = re.sub(r"/+", "/", win_cleaned).rstrip("/")
+            lower_win = win_norm.lower()
+            dangerous_win = (
+                "/windows",
+                "/program files",
+                "/program files (x86)",
+                "/programdata",
+            )
+            for w_pfx in dangerous_win:
+                if lower_win == w_pfx or lower_win.startswith(w_pfx + "/"):
+                    return True
+
+        try:
+            p = Path(path).resolve()
+            resolved_str = str(p).replace("\\", "/").rstrip("/")
+            lower_resolved = cls._clean_macos_data_volume(resolved_str).lower()
+            if lower_resolved != lower_posix:
+                for exact in ("/var", "/private/var"):
+                    if lower_resolved == exact.lower():
+                        return True
+                for pfx in dangerous_posix:
+                    if lower_resolved == pfx or lower_resolved.startswith(pfx + "/"):
+                        return True
+                resolved_no_drive = re.sub(r"^[a-zA-Z]:", "", lower_resolved)
+                if resolved_no_drive.startswith("/"):
+                    for w_pfx in (
+                        "/windows",
+                        "/program files",
+                        "/program files (x86)",
+                        "/programdata",
+                    ):
+                        if resolved_no_drive == w_pfx or resolved_no_drive.startswith(w_pfx + "/"):
+                            return True
+        except Exception:
+            pass
+
+        return False
+
     def _validate_workspace_root(self, workspace_root: str | Path) -> Path:
         """Validate that workspace_root is an existing directory and not a dangerous root."""
         raw_path = Path(workspace_root)
@@ -204,10 +304,22 @@ class SandboxManager:
                 f"Invalid workspace root '{workspace_root}': filesystem root is not allowed"
             )
 
+        if self._is_dangerous_system_path(workspace_root) or self._is_dangerous_system_path(
+            raw_path
+        ):
+            raise SandboxError(
+                f"Invalid workspace root '{workspace_root}': system directory is not allowed"
+            )
+
         root = raw_path.expanduser().resolve()
         if self._is_filesystem_root(root):
             raise SandboxError(
                 f"Invalid workspace root '{workspace_root}': filesystem root is not allowed"
+            )
+
+        if self._is_dangerous_system_path(root):
+            raise SandboxError(
+                f"Invalid workspace root '{workspace_root}': system directory is not allowed"
             )
 
         if not root.is_dir():

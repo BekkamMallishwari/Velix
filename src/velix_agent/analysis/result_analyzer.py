@@ -33,10 +33,13 @@ class ResultAnalyzer:
             )
 
         # 2. Security Blocked
+        blocking_security_events = [
+            ev for ev in result.security_events if not ev.startswith("UNISOLATED_FILESYSTEM")
+        ]
         if (
             "operation not permitted" in combined_output
             or "permission denied" in combined_output
-            or len(result.security_events) > 0
+            or len(blocking_security_events) > 0
         ):
             return AnalysisResult(
                 classification=ResultClassification.SECURITY_BLOCKED,
@@ -77,7 +80,8 @@ class ResultAnalyzer:
             "fatal error",
             "traceback (most recent call last)",
         ]
-        # Except we must be careful: if a module is missing, Python gives ModuleNotFoundError, which inherits from Exception.
+        # Except we must be careful: if a module is missing, Python gives
+        # ModuleNotFoundError, which inherits from Exception.
         # But ModuleNotFoundError is retryable by installing the dependency.
         if (
             "modulenotfounderror" in combined_output

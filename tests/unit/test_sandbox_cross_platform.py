@@ -1001,6 +1001,117 @@ def test_sandbox_workspace_root_fail_closed_unsupported_platform(
 
 
 # ---------------------------------------------------------------------------
+# Dangerous system directory rejection tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "system_path",
+    [
+        "/etc",
+        "/etc/ssl",
+        "/bin",
+        "/sbin",
+        "/usr",
+        "/usr/bin",
+        "/usr/local/bin",
+        "/lib",
+        "/lib64",
+        "/dev",
+        "/proc",
+        "/sys",
+        "/boot",
+        "/root",
+        "/System",
+        "/System/Library",
+        "/Library",
+        "/Library/Preferences",
+        "/var",
+        "/var/log",
+        "/private/etc",
+    ],
+)
+def test_sandbox_workspace_root_rejects_dangerous_system_directories_posix(
+    system_path: str,
+) -> None:
+    """Critical POSIX/macOS system directories and their descendants must be rejected."""
+    manager = SandboxManager()
+    assert SandboxManager._is_dangerous_system_path(system_path)
+    with pytest.raises(SandboxError, match="system directory is not allowed"):
+        manager._validate_workspace_root(system_path)
+
+
+@pytest.mark.parametrize(
+    "win_path",
+    [
+        "C:\\Windows",
+        "C:\\Windows\\System32",
+        "c:/windows/system32",
+        "D:\\Windows",
+        "\\Windows\\System32",
+        "C:\\Program Files",
+        "C:\\Program Files\\App",
+        "C:\\Program Files (x86)\\App",
+        "C:\\ProgramData",
+        "C:\\ProgramData\\Microsoft",
+    ],
+)
+def test_sandbox_workspace_root_rejects_dangerous_system_directories_windows(
+    win_path: str,
+) -> None:
+    """Critical Windows system directories and their descendants must be rejected."""
+    manager = SandboxManager()
+    assert SandboxManager._is_dangerous_system_path(win_path)
+    with pytest.raises(SandboxError, match="system directory is not allowed"):
+        manager._validate_workspace_root(win_path)
+
+
+def test_sandbox_workspace_root_rejects_symlink_to_system_directory(tmp_path: Path) -> None:
+    """Symlinks resolving to dangerous system directories must be rejected."""
+    target_etc = Path("/etc")
+    if not target_etc.exists():
+        pytest.skip("/etc does not exist on this host")
+
+    link_path = tmp_path / "symlink_to_etc"
+    try:
+        link_path.symlink_to(target_etc)
+    except (OSError, NotImplementedError):
+        pytest.skip("Creating symlinks is not supported in this environment")
+
+    manager = SandboxManager()
+    with pytest.raises(SandboxError, match="system directory is not allowed"):
+        manager._validate_workspace_root(link_path)
+
+
+def test_sandbox_workspace_root_accepts_legitimate_project_directories(tmp_path: Path) -> None:
+    """Legitimate project and temporary paths must never be rejected as system directories."""
+    manager = SandboxManager()
+
+    valid_project = tmp_path / "my_valid_app"
+    valid_project.mkdir()
+    validated = manager._validate_workspace_root(valid_project)
+    assert validated == valid_project.resolve()
+
+    nested_project = valid_project / "packages" / "frontend"
+    nested_project.mkdir(parents=True)
+    validated_nested = manager._validate_workspace_root(nested_project)
+    assert validated_nested == nested_project.resolve()
+
+    # Verify standard project path patterns are not falsely flagged
+    safe_paths = [
+        "/tmp/my_project",
+        "/var/tmp/my_project",
+        "/home/developer/src/my_app",
+        "/Users/developer/code/my_app",
+        "C:\\projects\\my_app",
+        "C:\\Users\\Developer\\source\\my_app",
+        "D:\\workspace\\project",
+    ]
+    for p in safe_paths:
+        assert not SandboxManager._is_dangerous_system_path(p), f"Falsely rejected: {p}"
+
+
+# ---------------------------------------------------------------------------
 # Filesystem-isolation transparency tests
 # ---------------------------------------------------------------------------
 

@@ -617,6 +617,29 @@ def test_windows_workspace_root_rejects_userprofile_home(
         mgr._validate_workspace_root(str(fake_userprofile).lower())
 
 
+def test_windows_workspace_root_rejects_system_directories() -> None:
+    """Verify Windows system directories and their descendants are rejected."""
+    backend = WindowsSandboxBackend()
+    mgr = SandboxManager(backend=backend)
+
+    dangerous_dirs = [
+        "C:\\Windows",
+        "C:\\Windows\\System32",
+        "c:/windows/system32",
+        "D:\\Windows",
+        "\\Windows\\System32",
+        "C:\\Program Files",
+        "C:\\Program Files\\App",
+        "C:\\Program Files (x86)\\App",
+        "C:\\ProgramData",
+        "C:\\ProgramData\\Microsoft",
+    ]
+    for d in dangerous_dirs:
+        assert SandboxManager._is_dangerous_system_path(d), f"Expected {d} to be dangerous"
+        with pytest.raises(SandboxError, match="system directory is not allowed"):
+            mgr._validate_workspace_root(d)
+
+
 def test_windows_manager_strict_mode_rejects_unsupported_capabilities(
     tmp_path: Path,
 ) -> None:
