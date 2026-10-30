@@ -1,18 +1,25 @@
 import contextlib
 import errno
-import fcntl
 import hashlib
 import os
 import platform
-import resource
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import typing
 from pathlib import Path
+
+# fcntl, resource, and signal are POSIX-only; they do not exist on Windows.
+# This module is only ever *instantiated* on Linux, but it may be *imported*
+# on any platform (e.g., cross-platform tests that reference the class name).
+# Guard the imports so that a bare `import linux` on Windows does not raise
+# ModuleNotFoundError at parse time.
+if sys.platform != "win32":
+    import fcntl
+    import resource
+    import signal
 
 from velix_agent.core.logging import get_logger
 from velix_agent.sandbox.backends.base import SandboxBackend
