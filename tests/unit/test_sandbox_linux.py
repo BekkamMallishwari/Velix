@@ -628,6 +628,7 @@ def test_bwrap_sentinel_concurrent_refcounting(tmp_path: Path) -> None:
         assert not git_dir.exists(), "Sentinel must be cleaned up after all executions finish"
 
 
+@pytest.mark.timeout(30)
 def test_bwrap_sentinel_real_multithread_concurrency(tmp_path: Path) -> None:
     """Verify genuinely concurrent threads executing on the same workspace coordinate safely."""
     git_dir = tmp_path / ".git"
@@ -636,7 +637,10 @@ def test_bwrap_sentinel_real_multithread_concurrency(tmp_path: Path) -> None:
     backend = LinuxSandboxBackend()
     policy = SandboxPolicy(workspace_root=tmp_path, allow_network=True)
 
-    with patch("shutil.which", return_value="/usr/bin/bwrap"), \
+    def mock_which(cmd: str) -> str | None:
+        return "/usr/bin/bwrap" if cmd == "bwrap" else None
+
+    with patch("shutil.which", side_effect=mock_which), \
          patch("platform.system", return_value="Linux"), \
          patch("subprocess.Popen") as mock_popen:
 
@@ -662,7 +666,7 @@ def test_bwrap_sentinel_real_multithread_concurrency(tmp_path: Path) -> None:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             futures = [executor.submit(worker, i) for i in range(4)]
-            results = [f.result() for f in futures]
+            results = [f.result(timeout=10) for f in futures]
 
         assert all(code == 0 for code in results)
         assert not git_dir.exists(), "Sentinel must be completely cleaned up after threads finish"

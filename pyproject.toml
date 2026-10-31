@@ -55,7 +55,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-v"
+addopts = "-v --timeout=60"
 
 [tool.ruff]
 target-version = "py312"
