@@ -129,6 +129,7 @@ jobs:
 
       # Platform backend unit tests
       - name: Run ${{ matrix.name }} backend unit tests
+        timeout-minutes: 5
         run: |
           python -m pytest ${{ matrix.backend_test }} -v --tb=short
 

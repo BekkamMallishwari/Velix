@@ -672,7 +672,7 @@ def test_bwrap_sentinel_real_multithread_concurrency(tmp_path: Path) -> None:
         assert not git_dir.exists(), "Sentinel must be completely cleaned up after threads finish"
 
 
-def _mp_worker(ws_str: str, out_queue: typing.Any) -> None:
+def _mp_worker(ws_str: str, out_val: typing.Any) -> None:
     import io
     import time
     from pathlib import Path
@@ -703,7 +703,7 @@ def _mp_worker(ws_str: str, out_queue: typing.Any) -> None:
 
         mp_popen.side_effect = slow_p
         res = b.execute(["echo", "mp"], pol)
-        out_queue.put(res.exit_code)
+        out_val.value = res.exit_code
 
 
 @pytest.mark.timeout(30)
@@ -719,9 +719,10 @@ def test_bwrap_sentinel_multiprocess_concurrency(tmp_path: Path) -> None:
     assert not git_dir.exists()
 
     ctx = multiprocessing.get_context("spawn")
-    q: typing.Any = ctx.Queue()
-    p1 = ctx.Process(target=_mp_worker, args=(tmp_path.as_posix(), q))
-    p2 = ctx.Process(target=_mp_worker, args=(tmp_path.as_posix(), q))
+    exit_code1 = ctx.Value("i", -1)
+    exit_code2 = ctx.Value("i", -1)
+    p1 = ctx.Process(target=_mp_worker, args=(tmp_path.as_posix(), exit_code1))
+    p2 = ctx.Process(target=_mp_worker, args=(tmp_path.as_posix(), exit_code2))
 
     processes = [p1, p2]
     try:
@@ -733,11 +734,8 @@ def test_bwrap_sentinel_multiprocess_concurrency(tmp_path: Path) -> None:
         assert not p1.is_alive(), "Worker process 1 timed out"
         assert not p2.is_alive(), "Worker process 2 timed out"
 
-        res1 = q.get(timeout=5)
-        res2 = q.get(timeout=5)
-
-        assert res1 == 0
-        assert res2 == 0
+        assert exit_code1.value == 0
+        assert exit_code2.value == 0
         assert not git_dir.exists(), "Sentinel must be removed after all processes finish"
     finally:
         for p in processes:
@@ -760,15 +758,6 @@ def test_bwrap_sentinel_multiprocess_concurrency(tmp_path: Path) -> None:
             # 3. Clean up process descriptor resources
             with contextlib.suppress(Exception):
                 p.close()
-        with contextlib.suppress(Exception):
-            # cancel_join_thread MUST be called before close() on Linux.
-            # q.close() blocks until the Queue's background feeder thread finishes
-            # flushing its write buffer; cancel_join_thread() skips that wait.
-            # Calling cancel_join_thread() first prevents a deadlock when the
-            # spawned worker process exited without draining the queue.
-            q.cancel_join_thread()
-        with contextlib.suppress(Exception):
-            q.close()
 
 
 def test_bwrap_lock_acquisition_failure_fails_closed(tmp_path: Path) -> None:
