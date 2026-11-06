@@ -672,92 +672,94 @@ def test_bwrap_sentinel_real_multithread_concurrency(tmp_path: Path) -> None:
         assert not git_dir.exists(), "Sentinel must be completely cleaned up after threads finish"
 
 
-def _mp_worker(ws_str: str, out_val: typing.Any) -> None:
-    import io
-    import time
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
-    from velix_agent.sandbox.backends.linux import LinuxSandboxBackend
-    from velix_agent.sandbox.policy import SandboxPolicy
-
-    ws = Path(ws_str)
-    b = LinuxSandboxBackend()
-    pol = SandboxPolicy(workspace_root=ws, allow_network=True)
-
-    def mock_which(cmd: str) -> str | None:
-        return "/usr/bin/bwrap" if cmd == "bwrap" else None
-
-    with patch("shutil.which", side_effect=mock_which), \
-         patch("platform.system", return_value="Linux"), \
-         patch("subprocess.Popen") as mp_popen:
-
-        def slow_p(*args: typing.Any, **kwargs: typing.Any) -> MagicMock:
-            time.sleep(0.05)
-            p = MagicMock()
-            p.poll.return_value = 0
-            p.returncode = 0
-            p.stdout = io.BytesIO(b"")
-            p.stderr = io.BytesIO(b"")
-            return p
-
-        mp_popen.side_effect = slow_p
-        res = b.execute(["echo", "mp"], pol)
-        out_val.value = res.exit_code
-
-
 @pytest.mark.timeout(30)
 def test_bwrap_sentinel_multiprocess_concurrency(tmp_path: Path) -> None:
     """Verify genuinely independent processes coordinate sentinel via client token IPC locking.
 
     A 30-second hard timeout is applied via pytest-timeout to guarantee that a stuck
-    spawned worker process cannot block the CI runner indefinitely.
+    worker process cannot block the CI runner indefinitely.
     """
-    import multiprocessing
+    import subprocess
+    import sys
 
     git_dir = tmp_path / ".git"
     assert not git_dir.exists()
 
-    ctx = multiprocessing.get_context("spawn")
-    exit_code1 = ctx.Value("i", -1)
-    exit_code2 = ctx.Value("i", -1)
-    p1 = ctx.Process(target=_mp_worker, args=(tmp_path.as_posix(), exit_code1))
-    p2 = ctx.Process(target=_mp_worker, args=(tmp_path.as_posix(), exit_code2))
+    worker_code = f"""
+import io
+import sys
+import time
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-    processes = [p1, p2]
+from velix_agent.sandbox.backends.linux import LinuxSandboxBackend
+from velix_agent.sandbox.policy import SandboxPolicy
+
+ws = Path({tmp_path.as_posix()!r})
+b = LinuxSandboxBackend()
+pol = SandboxPolicy(workspace_root=ws, allow_network=True)
+
+def mock_which(cmd: str) -> str | None:
+    return "/usr/bin/bwrap" if cmd == "bwrap" else None
+
+with patch("shutil.which", side_effect=mock_which), \\
+     patch("platform.system", return_value="Linux"), \\
+     patch("subprocess.Popen") as mp_popen:
+
+    def slow_p(*args, **kwargs) -> MagicMock:
+        time.sleep(0.08)
+        p = MagicMock()
+        p.poll.return_value = 0
+        p.returncode = 0
+        p.stdout = io.BytesIO(b"")
+        p.stderr = io.BytesIO(b"")
+        return p
+
+    mp_popen.side_effect = slow_p
+    res = b.execute(["echo", "mp"], pol)
+    sys.exit(res.exit_code)
+"""
+
+    processes: list[subprocess.Popen[str]] = []
     try:
-        p1.start()
-        p2.start()
-        p1.join(timeout=10)
-        p2.join(timeout=10)
+        p1 = subprocess.Popen(
+            [sys.executable, "-c", worker_code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        processes.append(p1)
 
-        assert not p1.is_alive(), "Worker process 1 timed out"
-        assert not p2.is_alive(), "Worker process 2 timed out"
+        p2 = subprocess.Popen(
+            [sys.executable, "-c", worker_code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        processes.append(p2)
 
-        assert exit_code1.value == 0
-        assert exit_code2.value == 0
+        _out1, err1 = p1.communicate(timeout=10)
+        _out2, err2 = p2.communicate(timeout=10)
+
+        assert p1.returncode == 0, f"Worker process 1 failed (code {p1.returncode}): {err1}"
+        assert p2.returncode == 0, f"Worker process 2 failed (code {p2.returncode}): {err2}"
         assert not git_dir.exists(), "Sentinel must be removed after all processes finish"
     finally:
         for p in processes:
-            # 1. Attempt graceful termination
-            try:
-                if p.is_alive():
+            if p.poll() is None:
+                with contextlib.suppress(Exception):
                     p.terminate()
-                    p.join(timeout=1)
-            except Exception:
-                pass
-
-            # 2. Force kill if worker remains alive (even if terminate raised)
-            try:
-                if p.is_alive():
+                    p.wait(timeout=1)
+            if p.poll() is None:
+                with contextlib.suppress(Exception):
                     p.kill()
-                    p.join(timeout=1)
-            except Exception:
-                pass
-
-            # 3. Clean up process descriptor resources
+                    p.wait(timeout=1)
             with contextlib.suppress(Exception):
-                p.close()
+                if p.stdout:
+                    p.stdout.close()
+            with contextlib.suppress(Exception):
+                if p.stderr:
+                    p.stderr.close()
 
 
 def test_bwrap_lock_acquisition_failure_fails_closed(tmp_path: Path) -> None:
