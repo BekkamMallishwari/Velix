@@ -13,66 +13,94 @@ import pytest
 from velix_agent.sandbox.backends.base import SandboxBackend
 from velix_agent.sandbox.manager import SandboxManager
 from velix_agent.sandbox.policy import SandboxCapabilities, SandboxPolicy
-from velix_agent.sandbox.result import SandboxError, SandboxResult
+from velix_agent.sandbox.result import (
+    SandboxError,
+    SandboxResult,
+    UnsupportedPlatformError,
+)
 
 
-def test_sandbox_unsupported_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sandbox_unsupported_platform(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # Force platform.system() to return something unsupported
     monkeypatch.setattr(platform, "system", lambda: "UnknownOS")
 
     manager = SandboxManager()
     assert manager.backend is None
 
-    with pytest.raises(SandboxError, match="Sandbox backend unavailable"):
-        manager.execute(["echo", "hello"], "/tmp")
+    with pytest.raises(
+        UnsupportedPlatformError,
+        match="Sandbox backend unavailable for platform: UnknownOS",
+    ):
+        manager.execute(["echo", "hello"], tmp_path)
 
 
-def test_sandbox_linux_platform_selection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Linux platform selection instantiates LinuxSandboxBackend."""
-    from velix_agent.sandbox.backends.linux import LinuxSandboxBackend
-
-    monkeypatch.setattr(platform, "system", lambda: "Linux")
-    manager = SandboxManager()
-    assert isinstance(manager.backend, LinuxSandboxBackend)
-
-
-def test_sandbox_linux_missing_bwrap_fails_closed(
+def test_sandbox_linux_is_unsupported_in_all_modes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Linux without Bubblewrap must return unavailable capabilities and fail closed.
+    """Linux is unsupported and must fail closed with UnsupportedPlatformError in every mode.
 
-    Proves that a requested command is never executed on Linux when bwrap is missing
-    and no unrestricted subprocess fallback occurs.
+    Verifies:
+      1. manager.backend is None.
+      2. get_capabilities() returns NOT_AVAILABLE for all fields.
+      3. execute() raises UnsupportedPlatformError in STRICT, BALANCED, and DEVELOPMENT modes.
+      4. No subprocess is ever spawned (verified via mock and canary file check).
     """
     from unittest.mock import patch
 
-    from velix_agent.sandbox.backends.linux import LinuxSandboxBackend
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    manager = SandboxManager()
+    assert manager.backend is None
+
+    caps = manager.get_capabilities()
+    for field_name in (
+        "filesystem_isolation",
+        "network_isolation",
+        "cpu_limit",
+        "memory_limit",
+        "process_limit",
+        "timeout",
+        "output_limit",
+        "secret_filtering",
+    ):
+        assert getattr(caps, field_name) == "NOT_AVAILABLE"
+
+    canary_file = tmp_path / "canary_linux_executed.txt"
+    command = [sys.executable, "-c", f"open({str(canary_file)!r}, 'w').write('executed')"]
+
+    with patch("subprocess.Popen") as mock_popen, patch("subprocess.run") as mock_run:
+        for mode in ("STRICT", "BALANCED", "DEVELOPMENT"):
+            with pytest.raises(
+                UnsupportedPlatformError,
+                match="Sandbox backend unavailable for platform: Linux",
+            ):
+                manager.execute(command, tmp_path, mode=mode)
+
+        # Verify no subprocess was ever invoked
+        assert mock_popen.call_count == 0
+        assert mock_run.call_count == 0
+
+    # Verify canary file was never created (fail-closed, zero execution)
+    assert not canary_file.exists(), "Command executed on unsupported Linux platform!"
+
+
+def test_sandbox_unsupported_platform_error_hierarchy() -> None:
+    """UnsupportedPlatformError must subclass SandboxError for caller compatibility."""
+    assert issubclass(UnsupportedPlatformError, SandboxError)
+
+
+def test_run_command_tool_handles_unsupported_platform(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """RunCommandTool must catch UnsupportedPlatformError and return error ToolResult."""
+    from velix_agent.tools.run_command import RunCommandTool
 
     monkeypatch.setattr(platform, "system", lambda: "Linux")
-    with patch("shutil.which", return_value=None):
-        manager = SandboxManager()
-        assert isinstance(manager.backend, LinuxSandboxBackend)
+    mgr = SandboxManager()
+    tool = RunCommandTool(sandbox=mgr, workspace_root=tmp_path)
+    res = tool.execute(command=["echo", "unsupported"])
+    assert res.status == "error"
+    assert "Sandbox backend unavailable for platform: Linux" in (res.error or "")
 
-        caps = manager.get_capabilities()
-        for field_name in (
-            "filesystem_isolation",
-            "network_isolation",
-            "cpu_limit",
-            "memory_limit",
-            "process_limit",
-        ):
-            assert getattr(caps, field_name) == "NOT_AVAILABLE"
-
-        # Command that would create a marker file if executed
-        canary_file = tmp_path / "canary_linux_executed.txt"
-        command = [sys.executable, "-c", f"open({str(canary_file)!r}, 'w').write('executed')"]
-
-        err_match = r"Capability 'filesystem_isolation' is required.*NOT_AVAILABLE|Bubblewrap"
-        with pytest.raises(SandboxError, match=err_match):
-            manager.execute(command, tmp_path)
-
-        # Prove command was NEVER executed (fail-closed, no unrestricted fallback)
-        assert not canary_file.exists(), "Command was executed despite missing Bubblewrap!"
 
 
 def test_sandbox_capabilities() -> None:
@@ -84,7 +112,7 @@ def test_sandbox_capabilities() -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_cross_platform_basic_execution(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -98,7 +126,7 @@ def test_sandbox_cross_platform_basic_execution(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_cross_platform_timeout(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -120,7 +148,7 @@ def test_sandbox_cross_platform_timeout(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_cross_platform_workspace_restriction(tmp_path: Path) -> None:
     # Basic check that the process starts in the workspace
@@ -141,7 +169,7 @@ def test_sandbox_cross_platform_workspace_restriction(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_network_isolation_enforcement(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -168,7 +196,7 @@ def test_sandbox_network_isolation_enforcement(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_disk_limit_unsupported() -> None:
     manager = SandboxManager()
@@ -328,7 +356,7 @@ def test_backend_read_stream_output_limits() -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_small_output_limit(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -356,7 +384,7 @@ def test_sandbox_functional_small_output_limit(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_large_output_limit_no_truncation(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -378,7 +406,7 @@ def test_sandbox_functional_large_output_limit_no_truncation(tmp_path: Path) -> 
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_zero_output_limit(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -415,7 +443,7 @@ def test_sandbox_functional_zero_output_limit(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_independent_stream_limits(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -446,7 +474,7 @@ def test_sandbox_functional_independent_stream_limits(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_continuous_output_timeout_and_memory_bounded(tmp_path: Path) -> None:
     manager = SandboxManager()
@@ -475,7 +503,7 @@ def test_sandbox_functional_continuous_output_timeout_and_memory_bounded(tmp_pat
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_output_exact_boundary(tmp_path: Path) -> None:
     """Verify that output exactly equal to max_output_size is not marked truncated."""
@@ -503,7 +531,7 @@ def test_sandbox_functional_output_exact_boundary(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_output_boundary_plus_one(tmp_path: Path) -> None:
     """Verify that output of max_output_size + 1 is truncated to max_output_size."""
@@ -534,7 +562,7 @@ def test_sandbox_functional_output_boundary_plus_one(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_output_utf8_multibyte_truncation(tmp_path: Path) -> None:
     """Verify multi-byte UTF-8 output truncation handles byte boundaries and markers cleanly."""
@@ -592,7 +620,7 @@ def test_sandbox_functional_output_utf8_multibyte_truncation(tmp_path: Path) -> 
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_functional_stderr_exact_boundary_and_truncation(tmp_path: Path) -> None:
     """Verify stderr stream truncation behavior independently at exact and overflow boundaries."""
@@ -753,7 +781,7 @@ def test_sandbox_explicit_cpu_limit_balanced_mode_tolerates_partial(tmp_path: Pa
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_timeout_with_detached_descendant(tmp_path: Path) -> None:
     """Verify timeout handling returns boundedly even if a descendant detaches and survives."""
@@ -818,7 +846,7 @@ def test_sandbox_timeout_with_detached_descendant(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(
-    platform.system() not in ("Darwin", "Linux", "Windows"), reason="Unsupported OS"
+    platform.system() not in ("Darwin", "Windows"), reason="Unsupported OS"
 )
 def test_sandbox_normal_root_exit_with_background_descendant(tmp_path: Path) -> None:
     """Verify normal root exit returns boundedly and captures output when descendant survives."""

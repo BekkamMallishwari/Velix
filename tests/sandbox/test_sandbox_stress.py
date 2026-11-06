@@ -91,7 +91,7 @@ def test_stress_timeout_under_cpu_load(
       -1       Our timeout handler fired first (process.wait(timeout=N) expired)
       -24      SIGXCPU fired first because macOS RLIMIT_CPU == sandbox_timeout
       -9       SIGKILL from killpg fired before SIGXCPU was delivered
-      >0       bwrap/sandbox-exec wrapper exited with a non-zero code
+      >0       sandbox wrapper exited with a non-zero code
 
     The exact signal depends on a race between RLIMIT_CPU and process.wait();
     either constitutes correct forced termination. We only assert that the process
@@ -125,7 +125,7 @@ def test_stress_timeout_under_cpu_load(
 
     # Acceptable forced-kill codes on POSIX:
     #   -1     = our timeout handler
-    #   -SIGXCPU (-24 on macOS/Linux) = CPU rlimit
+    #   -SIGXCPU (-24 on macOS) = CPU rlimit
     #   -SIGKILL (-9) = killpg
     # On Windows the backend returns -1 for all timeout kills.
     valid_killed = {-1}
@@ -322,8 +322,8 @@ def test_stress_runaway_child_cleanup_speed(
     """
     if not _has_timeout(caps):
         pytest.skip(f"timeout={getattr(caps, 'timeout', 'N/A')} on {_SYSTEM}")
-    if _SYSTEM not in ("Darwin", "Linux"):
-        pytest.skip("Runaway child reaping via killpg is POSIX-only")
+    if _SYSTEM != "Darwin":
+        pytest.skip("Runaway child reaping via killpg is macOS-only")
 
     import subprocess
 

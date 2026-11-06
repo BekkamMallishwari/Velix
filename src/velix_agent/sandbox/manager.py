@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 from velix_agent.core.logging import get_logger
 from velix_agent.sandbox.backends.base import SandboxBackend
 from velix_agent.sandbox.policy import SandboxPolicy
-from velix_agent.sandbox.result import SandboxError, SandboxResult
+from velix_agent.sandbox.result import SandboxError, SandboxResult, UnsupportedPlatformError
 
 logger = get_logger("sandbox.manager")
 
@@ -21,10 +21,9 @@ class SandboxManager:
 
     Supported platforms:
       - macOS (Darwin): Apple Seatbelt (sandbox-exec) backend
-      - Linux: Bubblewrap (bwrap) backend
       - Windows: Win32 Job Object backend
 
-    Other platforms are unsupported and fail closed with SandboxError.
+    Other platforms (including Linux) are unsupported and fail closed with UnsupportedPlatformError.
     """
 
     backend: SandboxBackend | None
@@ -38,10 +37,6 @@ class SandboxManager:
                 from velix_agent.sandbox.backends.macos import MacOSSandboxBackend
 
                 self.backend = MacOSSandboxBackend()
-            elif sys_name == "Linux":
-                from velix_agent.sandbox.backends.linux import LinuxSandboxBackend
-
-                self.backend = LinuxSandboxBackend()
             elif sys_name == "Windows":
                 from velix_agent.sandbox.backends.windows import WindowsSandboxBackend
 
@@ -367,7 +362,7 @@ class SandboxManager:
 
         if self.backend is None:
             sys_name = platform.system()
-            raise SandboxError(f"Sandbox backend unavailable for platform: {sys_name}")
+            raise UnsupportedPlatformError(f"Sandbox backend unavailable for platform: {sys_name}")
 
         root = self._validate_workspace_root(workspace_root)
 

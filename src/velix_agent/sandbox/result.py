@@ -22,3 +22,9 @@ class SandboxError(Exception):
     """Exception raised when the sandbox fails to initialize or execute."""
 
     pass
+
+
+class UnsupportedPlatformError(SandboxError):
+    """Exception raised when running on an unsupported operating system platform."""
+
+    pass

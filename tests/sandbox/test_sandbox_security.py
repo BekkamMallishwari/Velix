@@ -148,7 +148,7 @@ def test_sandbox_write_outside_workspace_blocked(
             "write-outside-workspace test requires SUPPORTED filesystem isolation"
         )
     # Create a safe, unique test directory outside the workspace and outside /tmp
-    # so we don't rely on bwrap's private /tmp tmpfs masking.
+    # so we don't rely on private /tmp masking.
     local_escape_dir = Path(tempfile.mkdtemp(dir=Path.cwd()))
     outside = local_escape_dir / "outside.txt"
     try:
@@ -616,8 +616,8 @@ def test_windows_filesystem_isolation_is_unsupported_not_silently_skipped(
 def test_sandbox_python_interpreter_mounted(
     manager: SandboxManager, workspace: Path, caps: object
 ) -> None:
-    # This tests the regression where bwrap failed to execute sys.executable
-    # because it was missing from the sandbox mounts. We expect exit_code == 0
+    # This tests that the sandbox executes sys.executable
+    # because it is properly mounted in the sandbox. We expect exit_code == 0
     # because we explicitly mount the interpreter and selected runtime paths
     # (such as library directories and pyvenv.cfg when present).
     if getattr(caps, "filesystem_isolation", "N/A") != "SUPPORTED":

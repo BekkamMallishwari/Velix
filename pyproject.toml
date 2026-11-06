@@ -89,7 +89,6 @@ packages = ["velix_agent"]
 [[tool.mypy.overrides]]
 module = [
     "velix_agent.sandbox.backends.windows",
-    "velix_agent.sandbox.backends.linux",
     "velix_agent.sandbox.backends.macos"
 ]
 warn_unused_ignores = false

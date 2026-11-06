@@ -155,7 +155,7 @@ VelixAgent uses a platform-specific sandbox architecture to isolate tool executi
 *   **Windows (Supported):** Uses native Win32 Job Objects via ctypes (`SetInformationJobObject`).
     *   *Enforced:* Process tree containment, execution timeouts, active process limits, memory limits, output truncation, and secret redaction. **Does not require Administrator privileges.**
     *   *Security Limitation:* Native filesystem and network isolation are currently **unsupported** (no AppContainer or Windows Filtering Platform rules). Tests requiring filesystem/network isolation skip on Windows; skips are never treated as proof of isolation.
-*   **Linux (Unsupported):** Linux is explicitly unsupported for sandbox execution. The sandbox fails closed immediately with a `SandboxError` (`"Sandbox backend unavailable for platform: Linux"`). It **never** silently falls back to unrestricted subprocess execution.
+*   **Linux (Unsupported):** Linux is explicitly unsupported for sandbox execution. The sandbox fails closed immediately with an `UnsupportedPlatformError` (`"Sandbox backend unavailable for unsupported platform: Linux"`). It **never** silently falls back to unrestricted subprocess execution.
 
 ---
 
