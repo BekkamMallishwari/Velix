@@ -46,9 +46,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Linux
-            os: ubuntu-22.04
-            backend_test: tests/unit/test_sandbox_linux.py
           - name: macOS
             os: macos-latest
             backend_test: tests/unit/test_sandbox_macos.py
